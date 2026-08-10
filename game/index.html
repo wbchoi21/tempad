@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>TVA FIELD UNIT</title>
+<!-- ============================================================================
+     TVA FIELD UNIT — 게임 모드
+
+     게임보이 에뮬레이터는 binjgb (MIT, Copyright 2017 Ben Smith)
+     https://github.com/binji/binjgb
+
+     [ 파일 구실 ]
+       game.js  에뮬레이터 + 롬 보관 + 비정상 종료 방어
+       ui.js    화면 흐름 (시스템 고르기 → 목록 → 플레이 → 메뉴)
+       pad.js   터치 십자키
+       이 파일  화면 그리기와 크기 맞추기
+
+     로직은 전부 브라우저 없이 검사됩니다 →  node test/all.js
+     ========================================================================= -->
+<style>
+:root{ --or:#F8861E; --dim:#78420F; --mid:#A85C18; --bg:#040506; }
+*{ box-sizing:border-box; margin:0; padding:0; }
+html,body{
+  width:100%; height:100%; background:var(--bg); overflow:hidden;
+  font-family:ui-monospace,"Courier New",monospace; color:var(--or);
+  /* 브라우저가 스크롤·확대·길게눌러선택으로 터치를 가로채는 걸 막습니다 */
+  touch-action:none; user-select:none; -webkit-user-select:none;
+  -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent;
+}
+#dev{ position:absolute; border:2px solid var(--or); border-radius:10px; overflow:hidden; }
+
+/* ── 가운데 ────────────────────────────────────────────────────────── */
+#stage{ position:absolute; border:2px solid var(--or); }
+#screen{ display:block; image-rendering:pixelated; image-rendering:crisp-edges;
+         background:var(--bg); }
+/* 게임이 안 돌 때 이 위에 목록·메뉴를 그립니다 */
+#page{ position:absolute; overflow:hidden; padding:6px 8px; }
+#page h2{ font-size:11px; letter-spacing:2px; color:var(--or);
+          border-bottom:1px solid var(--dim); padding-bottom:3px; margin-bottom:5px; }
+.row{ font-size:11px; line-height:1.5; letter-spacing:.5px; color:var(--mid);
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:1px 3px; }
+.row.sel{ background:var(--or); color:var(--bg); }
+.row .sub{ font-size:9px; color:var(--dim); }
+.row.sel .sub{ color:var(--bg); opacity:.8; }
+#page .empty{ font-size:10px; color:var(--dim); line-height:1.7; margin-top:6px; }
+
+/* ── 좌우 판 ───────────────────────────────────────────────────────── */
+.pane{ position:absolute; top:0; bottom:0; }
+/* ★ 십자키 그림은 안내일 뿐. 왼쪽 판 전체가 조작 영역입니다. */
+#padArea{ position:absolute; inset:0; touch-action:none; }
+#padHint{ position:absolute; opacity:.5; pointer-events:none; }
+#padHint path{ fill:none; stroke:var(--dim); stroke-width:3; }
+.lbl{ position:absolute; font-size:9px; letter-spacing:1.5px; color:var(--dim);
+      pointer-events:none; }
+
+#info{ position:absolute; font-size:10px; line-height:1.55; letter-spacing:.6px; }
+#info .h{ color:var(--or); font-size:10px; letter-spacing:2px; }
+#info .v{ color:var(--dim); }
+#info hr{ border:0; border-top:1px solid var(--dim); margin:2px 0 5px; }
+
+.btn{ position:absolute; border:3px solid var(--dim); border-radius:50%;
+      display:flex; align-items:center; justify-content:center;
+      font-size:12px; color:var(--dim); }
+.btn.on{ border-color:var(--or); color:var(--or); }
+.cap{ position:absolute; border:2px solid var(--dim); border-radius:8px;
+      display:flex; align-items:center; justify-content:center;
+      font-size:8px; letter-spacing:1px; color:var(--dim); }
+.cap.on{ border-color:var(--or); color:var(--or); }
+
+#bar{ position:absolute; left:8px; right:8px; bottom:3px; display:flex;
+      justify-content:space-between; font-size:9px; letter-spacing:1px;
+      color:var(--dim); pointer-events:none; }
+/* 왼쪽 글자만 눌러서 템패드로 돌아갑니다 */
+#back{ pointer-events:auto; padding:2px 6px; margin:-2px -6px; }
+#note{ position:absolute; left:8px; right:8px; bottom:15px; font-size:9px;
+       letter-spacing:1px; color:var(--or); text-align:center; pointer-events:none; }
+
+#rot{ position:fixed; inset:0; display:none; background:var(--bg);
+      align-items:center; justify-content:center; font-size:14px; letter-spacing:2px; z-index:99; }
+@media (orientation:portrait){ #rot{ display:flex; } #dev{ visibility:hidden; } }
+#file{ display:none; }
+</style>
+</head>
+<body>
+
+<div id="dev">
+  <div class="pane" id="paneL">
+    <div id="padArea"></div>
+    <svg id="padHint" viewBox="0 0 100 100">
+      <path d="M35 12 H65 V35 H88 V65 H65 V88 H35 V65 H12 V35 H35 Z"/>
+    </svg>
+    <div class="lbl" id="lblMove">MOVE</div>
+  </div>
+
+  <div id="stage">
+    <canvas id="screen" width="160" height="144"></canvas>
+    <div id="page"></div>
+  </div>
+
+  <div class="pane" id="paneR">
+    <div id="info"></div>
+    <div class="cap" id="btnSel">SEL</div>
+    <div class="cap" id="btnSta">START</div>
+    <div class="btn" id="btnB">B</div>
+    <div class="btn" id="btnA">A</div>
+  </div>
+
+  <div id="note"></div>
+  <div id="bar"><span id="back">&lt; TVA // FIELD UNIT</span><span id="diag">—</span></div>
+</div>
+
+<div id="rot">TURN THE DEVICE SIDEWAYS</div>
+<input type="file" id="file" accept=".gb,.gbc">
+
+<!-- ★ binjgb 를 먼저 불러야 합니다. 아래에 두면 boot() 이 먼저 돌아서 못 찾습니다.
+     파일이 없어도 페이지는 떠야 하므로 onerror 로 넘어갑니다. -->
+<script src="binjgb.js" onerror="window.__noBinjgb=1"></script>
+<script src="game.js"></script>
+<script src="ui.js"></script>
+<script src="pad.js"></script>
+<script>
+/* ── 새 상태값은 맨 위에 ───────────────────────────────────────────── */
+let scale     = 2;      /* 게임 화면 확대율 (정수) */
+let edgeRight = 0;      /* 폰마다 오른쪽이 잘려서 따로 조절 */
+let wasmMod   = null;   /* binjgb. 처음 필요할 때 부릅니다 */
+let ui        = null;
+let pad       = null;
+
+const GW = 160, GH = 144, MARGIN = 12, MIN_PANE = 150;
+const $ = id => document.getElementById(id);
+
+/* ══ 크기 맞추기 ══════════════════════════════════════════════════════
+   ★ vh/vw 를 믿지 마세요. 폰마다 주소창을 포함해서 알려줍니다.
+     visualViewport 가 실제로 보이는 크기입니다.                        */
+function insets(){
+  const p = document.createElement("div");
+  p.style.cssText = "position:fixed;visibility:hidden;"
+    + "top:env(safe-area-inset-top);left:env(safe-area-inset-left);"
+    + "bottom:env(safe-area-inset-bottom);right:env(safe-area-inset-right)";
+  document.body.appendChild(p);
+  const s = getComputedStyle(p), n = v => Math.max(0, parseFloat(v) || 0);
+  const r = { t:n(s.top), l:n(s.left), b:n(s.bottom), r:n(s.right) };
+  p.remove(); return r;
+}
+
+function fit(){
+  const vv = window.visualViewport, de = document.documentElement;
+  const small = (a,b,c) => Math.floor(Math.min(a||Infinity, b||Infinity, c||Infinity));
+  const W = small(vv && vv.width,  de && de.clientWidth,  window.innerWidth);
+  const H = small(vv && vv.height, de && de.clientHeight, window.innerHeight);
+  if(!isFinite(W) || !isFinite(H) || !W || !H) return;
+
+  const ins = insets();
+  const dw = W - ins.l - ins.r - MARGIN*2 - edgeRight;
+  const dh = H - ins.t - ins.b - MARGIN*2;
+  const dev = $("dev");
+  dev.style.left = (ins.l+MARGIN)+"px"; dev.style.top = (ins.t+MARGIN)+"px";
+  dev.style.width = dw+"px"; dev.style.height = dh+"px";
+
+  /* ★ 정수배만. 소수배로 늘리면 도트가 뭉개집니다. */
+  scale = 1;
+  for(let s = 12; s >= 1; s--){
+    if(GH*s <= dh-8 && GW*s <= dw-MIN_PANE*2){ scale = s; break; }
+  }
+  const gw = GW*scale, gh = GH*scale;
+  const gx = Math.round((dw-gw)/2), gy = Math.round((dh-gh)/2);
+
+  const st = $("stage");
+  st.style.left=(gx-2)+"px"; st.style.top=(gy-2)+"px";
+  st.style.width=(gw+4)+"px"; st.style.height=(gh+4)+"px";
+  $("screen").style.width=gw+"px"; $("screen").style.height=gh+"px";
+  const pg = $("page");
+  pg.style.left="0px"; pg.style.top="0px"; pg.style.width=gw+"px"; pg.style.height=gh+"px";
+
+  $("paneL").style.left="0px";        $("paneL").style.width=gx+"px";
+  $("paneR").style.left=(gx+gw)+"px"; $("paneR").style.width=(dw-gx-gw)+"px";
+
+  const ps = Math.max(64, Math.min(gx-26, dh-130, 140));
+  const ph = $("padHint");
+  ph.style.width=ps+"px"; ph.style.height=ps+"px";
+  ph.style.left=Math.round((gx-ps)/2)+"px";
+  ph.style.top=Math.round((dh-ps)/2-8)+"px";
+  $("lblMove").style.left=Math.round((gx-32)/2)+"px";
+  $("lblMove").style.top=Math.round((dh+ps)/2+2)+"px";
+
+  const rw = dw-gx-gw;
+  $("info").style.left="12px"; $("info").style.top=(gy+2)+"px";
+  $("info").style.width=(rw-20)+"px";
+  const bs = Math.max(38, Math.min(52, rw/2-16));
+  $("btnB").style.cssText += `;left:12px;top:${dh-bs-34}px;width:${bs}px;height:${bs}px;`;
+  $("btnA").style.cssText += `;left:${12+bs+10}px;top:${dh-bs-34}px;width:${bs}px;height:${bs}px;`;
+  $("btnSel").style.cssText += `;left:12px;top:${dh-bs-66}px;width:${bs}px;height:24px;`;
+  $("btnSta").style.cssText += `;left:${12+bs+10}px;top:${dh-bs-66}px;width:${bs}px;height:24px;`;
+
+  $("diag").textContent = `${W}x${H} x${scale}`;
+}
+
+/* ══ 그리기 ═══════════════════════════════════════════════════════════ */
+function draw(){
+  const st = ui.state, pg = $("page"), inf = $("info"), sc = $("screen");
+  const playing = st.screen === "play";
+  sc.style.visibility = playing ? "visible" : "hidden";
+  pg.style.display = playing ? "none" : "block";
+  $("note").textContent = st.notice || "";
+
+  if (st.screen === "system"){
+    pg.innerHTML = "<h2>SELECT SYSTEM</h2>" + GameUi.SYSTEMS.map((s,i) =>
+      `<div class="row ${i===st.cursor?"sel":""}">${s.name}<div class="sub">${s.desc}</div></div>`
+    ).join("");
+    inf.innerHTML = `<div class="h">FIELD UNIT</div><hr>
+      <div class="v">CHOOSE A SYSTEM,<br>THEN A GAME.</div><br>
+      <div class="v">A &nbsp;SELECT<br>B &nbsp;BACK</div>`;
+  }
+  else if (st.screen === "list"){
+    const list = ui.list();
+    pg.innerHTML = "<h2>" + (ui.systemName()) + "</h2>" + (list.length
+      ? list.map((r,i) =>
+          `<div class="row ${i===st.cursor?"sel":""}">${r.title}<div class="sub">${
+            (r.hasSram?"SAVE ":"") + (r.states.some(Boolean)?"STATE ":"") + (r.note||"")}</div></div>`
+        ).join("")
+      : `<div class="empty">NO GAMES YET.<br><br>PRESS START TO ADD A FILE.</div>`);
+    inf.innerHTML = `<div class="h">${list.length} GAME${list.length===1?"":"S"}</div><hr>
+      <div class="v">A &nbsp;&nbsp;PLAY<br>B &nbsp;&nbsp;BACK<br>
+      START ADD FILE<br>SEL &nbsp;REMOVE</div>`;
+  }
+  else if (st.screen === "menu"){
+    pg.innerHTML = `<h2>PAUSED — ${st.title}</h2>` +
+      ui.menuItems().map((m,i) =>
+        `<div class="row ${i===st.cursor?"sel":""}">${m.label}<div class="sub">${m.sub}</div></div>`
+      ).join("");
+    inf.innerHTML = `<div class="h">MENU</div><hr>
+      <div class="v">A &nbsp;&nbsp;CHOOSE<br>B &nbsp;&nbsp;RESUME</div>`;
+  }
+  else {
+    inf.innerHTML = `<div class="h">${st.title}</div><hr>
+      <div class="v">SEL+START<br>&nbsp;&nbsp;OPEN MENU</div>`;
+  }
+}
+
+/* ══ 조작 ═════════════════════════════════════════════════════════════ */
+let selHeld = false, staHeld = false;
+
+function onPress(name, down){
+  /* 게임 중이면 그대로 넘깁니다 */
+  if (ui.state.screen === "play"){
+    /* SELECT + START 를 같이 누르면 메뉴. 게임보이에 남는 버튼이 없어서 이렇게 씁니다. */
+    if (name === "select") selHeld = down;
+    if (name === "start")  staHeld = down;
+    if (selHeld && staHeld){
+      ui.press("select", false); ui.press("start", false);
+      selHeld = staHeld = false;
+      pad.releaseAll();
+      ui.openMenu(); draw(); return;
+    }
+    ui.press(name, down);
+    return;
+  }
+  if (!down) return;                      /* 목록에서는 누를 때만 반응 */
+
+  const st = ui.state;
+  if (name === "up")    { ui.move(-1); draw(); return; }
+  if (name === "down")  { ui.move(1);  draw(); return; }
+
+  if (st.screen === "system"){
+    if (name === "A"){ ui.pickSystem(GameUi.SYSTEMS[st.cursor].id).then(draw); }
+    return;
+  }
+  if (st.screen === "list"){
+    if (name === "A")      { ui.play().then(draw); }
+    else if (name === "B") { ui.backToSystem(); draw(); }
+    else if (name === "start")  { $("file").click(); }
+    else if (name === "select") { ui.removeRom().then(draw); }
+    return;
+  }
+  if (st.screen === "menu"){
+    if (name === "A")      { ui.chooseMenu().then(draw); }
+    else if (name === "B") { ui.closeMenu(); draw(); }
+    return;
+  }
+}
+
+/* ══ 시작 ═════════════════════════════════════════════════════════════ */
+async function loadWasm(){
+  if (wasmMod) return wasmMod;
+  if (typeof Binjgb !== "function") throw new Error("no-binjgb");
+  wasmMod = await Binjgb();
+  return wasmMod;
+}
+
+async function fetchRom(path){
+  const res = await fetch(path);
+  if (!res.ok) throw new Error("rom-missing");
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+function boot(){
+  ui = new GameUi.Ui({
+    store: GameMode.RomStore,
+    engine: GameMode,
+    readFile: GameMode.readFile,
+    fetchRom, loadWasm,
+    canvas: $("screen"),
+  });
+
+  pad = new GamePad4.Pad({ onPress });
+  pad.attach($("padArea"), [
+    [$("btnA"), "A"], [$("btnB"), "B"],
+    [$("btnSel"), "select"], [$("btnSta"), "start"],
+  ]);
+
+  $("file").addEventListener("change", async e => {
+    const f = e.target.files[0];
+    e.target.value = "";
+    if (f) { await ui.addRom(f); draw(); }
+  });
+
+  /* ── 템패드로 돌아가기 ────────────────────────────────────────────────
+     ★ 나가기 전에 반드시 에뮬레이터를 정리합니다.
+       페이지를 떠나면 어차피 다 사라지지만, 저장이 날아가지 않게
+       마지막 저장을 하고 나가야 합니다.                                */
+  function leave(){
+    try { if (pad) pad.releaseAll(); } catch (e) {}
+    try { GameMode.stop(); } catch (e) {}
+    location.href = "../";
+  }
+  $("back").addEventListener("click", leave);
+
+  /* 폰의 뒤로가기로 나갈 때도 정리되게 */
+  addEventListener("pagehide", () => {
+    try { if (pad) pad.releaseAll(); } catch (e) {}
+    try { GameMode.stop(); } catch (e) {}
+  });
+
+  /* 다른 앱으로 가면 버튼을 전부 뗍니다.
+     안 그러면 돌아왔을 때 눌린 채로 남습니다. */
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && pad) pad.releaseAll();
+  });
+  document.addEventListener("contextmenu", e => e.preventDefault());
+
+  /* binjgb 파일이 없으면 알려줍니다. 검은 화면보다 낫습니다. */
+  if (typeof Binjgb !== "function"){
+    ui.warn("EMULATOR FILES MISSING — SEE roms/ROMS.md");
+  }
+  draw();
+}
+
+addEventListener("resize", fit);
+addEventListener("orientationchange", () => setTimeout(fit, 300));
+if (window.visualViewport){
+  visualViewport.addEventListener("resize", fit);
+  visualViewport.addEventListener("scroll", fit);
+}
+boot(); fit(); setTimeout(fit, 200); setTimeout(fit, 700);
+
+/* 오른쪽이 잘리면 START 를 길게 눌러 조절합니다.
+   폰마다 화면 크기 보고가 제각각이라 코드로는 못 맞춥니다. */
+let holdT = null;
+$("btnSta").addEventListener("pointerdown", () => {
+  holdT = setTimeout(() => { edgeRight = (edgeRight + 8) % 48; fit(); }, 900);
+});
+["pointerup","pointercancel","pointerleave"].forEach(t =>
+  $("btnSta").addEventListener(t, () => clearTimeout(holdT)));
+</script>
+</body>
+</html>

@@ -84,6 +84,53 @@ console.log("\n[1-4] ★★ 십자키와 버튼을 동시에 (두 손가락)");
   ok("전부 풀림", p.held.length===0);
 }
 
+console.log("\n[1-5] ★★ 블루투스 게임패드");
+{ const { gamepadHeld, gamepadEdges } = P;
+  /* 표준 규격대로 버튼 17개, 축 4개짜리 패드를 만듭니다 */
+  const mkPad = (down = [], axes = [0,0,0,0]) => ({
+    buttons: Array.from({length:17}, (_,i) => ({ pressed: down.indexOf(i) >= 0,
+                                                 value: down.indexOf(i) >= 0 ? 1 : 0 })),
+    axes,
+  });
+  const h = (...a) => gamepadHeld(...a).join(",");
+
+  ok("아무것도 안 누르면 없음", h([mkPad()])==="", h([mkPad()]));
+  ok("패드가 없어도 안 터짐", h([])==="" && h(null)==="" && h([null])==="");
+
+  /* ★ 게임보이는 A 가 오른쪽입니다 */
+  ok("★ 오른쪽 버튼(1) = A", h([mkPad([1])])==="A");
+  ok("★ 아래 버튼(0) = B",   h([mkPad([0])])==="B");
+  ok("왼쪽·위 버튼도 B (헷갈리지 말라고)", h([mkPad([2])])==="B" && h([mkPad([3])])==="B");
+  ok("SELECT(8)", h([mkPad([8])])==="select");
+  ok("START(9)",  h([mkPad([9])])==="start");
+  ok("★ L·R 은 MENU", h([mkPad([4])])==="menu" && h([mkPad([5])])==="menu");
+
+  /* 십자키 */
+  ok("십자키 위(12)",   h([mkPad([12])])==="up");
+  ok("십자키 아래(13)", h([mkPad([13])])==="down");
+  ok("★ 십자키 대각선", h([mkPad([12,15])])==="right,up", h([mkPad([12,15])]));
+
+  /* 아날로그 스틱도 십자키처럼 */
+  ok("스틱 오른쪽",     h([mkPad([], [ 1, 0,0,0])])==="right");
+  ok("스틱 위",         h([mkPad([], [ 0,-1,0,0])])==="up");
+  ok("★ 스틱 대각선",   h([mkPad([], [ 0.8,-0.8,0,0])])==="right,up");
+  ok("★ 살짝 기울인 건 무시", h([mkPad([], [0.3,0.3,0,0])])==="", h([mkPad([], [0.3,0.3,0,0])]));
+  ok("축이 이상해도 안 터짐", h([mkPad([], [NaN,undefined,0,0])])==="");
+
+  /* 게임에서 진짜 쓰는 조합 */
+  ok("★★ 대각선 + A + B 동시",
+     h([mkPad([0,1,12,15])])==="A,B,right,up", h([mkPad([0,1,12,15])]));
+
+  /* ★ 바뀐 것만 보내야 합니다. 안 그러면 1초에 60번씩 눌립니다. */
+  ok("같으면 아무것도 안 보냄",
+     gamepadEdges(["A","right"], ["A","right"]).length===0);
+  ok("★ 새로 눌린 것만", JSON.stringify(gamepadEdges(["A"], ["A","up"]))==='[["up",true]]');
+  ok("★ 뗀 것만",       JSON.stringify(gamepadEdges(["A","up"], ["up"]))==='[["A",false]]');
+  ok("눌림과 뗌이 같이", gamepadEdges(["A"], ["B"]).length===2);
+  ok("처음엔 전부 눌림", JSON.stringify(gamepadEdges([], ["A"]))==='[["A",true]]');
+  ok("★ 전부 놓기",     JSON.stringify(gamepadEdges(["A"], []))==='[["A",false]]');
+}
+
 console.log("\n[2] ★ 대각선 떨림 방지");
 { /* 45도 바로 근처에서 손가락이 미세하게 흔들려도 방향이 안 바뀌어야 함 */
   let d="right", flips=0;

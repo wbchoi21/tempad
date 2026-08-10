@@ -11,7 +11,7 @@
    (아이콘 같은 건 잘 안 바뀌니 저장해둔 걸 먼저 씁니다.)
    ========================================================================== */
 
-const VERSION = "tempad-v9";
+const VERSION = "tempad-v10";
 const KEEP = [
   "./index.html",
   "./app.json",

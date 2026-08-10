@@ -240,6 +240,13 @@ let holdCancel = null;
 /* boot() 안에서 만드는 "정리하고 템패드로 나가기". EXIT 가 씁니다. */
 let doLeave = null;
 
+/* ── 블루투스 게임패드 상태 ───────────────────────────────────────────
+   ★ 일부러 여기(맨 바깥)에 둡니다. boot() 안에 두면 검사에서 들여다볼 수가
+     없어서, "돌고 있는지" 를 확인할 방법이 사라집니다. */
+let gpPrev = [];      /* 지난 프레임에 눌려 있던 것들 */
+let gpRaf  = 0;       /* 프레임 예약 번호. 0 이면 안 돌고 있음 */
+let gpSeen = false;   /* 첫 입력을 봤는가 (소리 깨우기용) */
+
 const CAN_DIR = (() => {
   try {
     if (!("webkitdirectory" in document.createElement("input"))) return false;
@@ -789,6 +796,64 @@ function boot(){
     try { location.replace("../"); } catch (e) { location.href = "../"; }
   }
   doLeave = leave;
+
+  /* ── ★ 블루투스 게임패드 ────────────────────────────────────────────
+     꽂으면 저절로 잡힙니다. 설정할 것 없습니다.
+     터치 조작은 그대로 살아 있어서 둘 다 동시에 쓸 수 있습니다.
+
+     ★ 브라우저는 **버튼을 한 번 누르기 전까지** 패드를 안 알려줍니다
+       (몰래 기기를 알아내는 걸 막으려고). 그래서 "연결됨" 이 늦게
+       뜨는 게 정상입니다. 아무 버튼이나 한 번 누르면 잡힙니다.       */
+  function gpStop(){
+    if (gpRaf) { cancelAnimationFrame(gpRaf); gpRaf = 0; }
+    /* 눌린 채로 남지 않게 전부 놓습니다 */
+    for (const n of gpPrev) { if (n !== "menu") onPress(n, false); }
+    gpPrev = [];
+  }
+
+  function gpTick(){
+    gpRaf = requestAnimationFrame(gpTick);
+    let pads = [];
+    try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch (e) {}
+    const now = GamePad4.gamepadHeld(pads);
+    const changes = GamePad4.gamepadEdges(gpPrev, now);
+    gpPrev = now;
+    if (!changes.length) return;
+
+    /* 첫 입력 때 소리를 깨웁니다 (아이폰은 손짓이 있어야 소리가 납니다) */
+    if (!gpSeen) { gpSeen = true; try { GameMode.wakeAudio(); } catch (e) {} }
+
+    for (const [name, down] of changes) {
+      /* L·R 은 화면의 MENU 버튼과 같습니다. 누를 때만 반응합니다. */
+      if (name === "menu") { if (down) { if (pad) pad.releaseAll(); ui.up().then(draw); } continue; }
+      onPress(name, down);
+    }
+  }
+
+  function gpStart(){ if (!gpRaf) { gpPrev = []; gpTick(); } }
+
+  addEventListener("gamepadconnected", () => {
+    $("diag").textContent = "GAMEPAD";
+    gpStart();
+  });
+  addEventListener("gamepaddisconnected", () => {
+    let left = 0;
+    try { for (const p of (navigator.getGamepads() || [])) if (p) left++; } catch (e) {}
+    if (!left) { gpStop(); scheduleFit(); }   /* scheduleFit 이 diag 글자를 되돌립니다 */
+  });
+  /* 페이지에 들어올 때 이미 꽂혀 있을 수 있습니다 */
+  try {
+    for (const p of (navigator.getGamepads ? navigator.getGamepads() : [])) if (p) { gpStart(); break; }
+  } catch (e) {}
+  /* 다른 앱으로 가면 멈춥니다 — 안 그러면 배터리를 계속 먹습니다 */
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") gpStop();
+    else {
+      try {
+        for (const p of (navigator.getGamepads ? navigator.getGamepads() : [])) if (p) { gpStart(); break; }
+      } catch (e) {}
+    }
+  });
   /* ★ $("back") 에는 아무것도 안 붙입니다.
        십자키 옆이라 게임 중에 스쳐 눌리던 자리입니다. 이제 이름표일 뿐입니다. */
 

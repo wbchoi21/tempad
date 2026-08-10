@@ -62,6 +62,11 @@ function run(opts={}){
   const els={}; ids.forEach(i=>els[i]=makeEl(i));
   const store=new Map();
   const timers=[];
+  const rafQ=[];
+  const pads=[];
+  /* ★ this 를 안 쓰고 여기에 모읍니다. vm 안에서 부르면 this 가
+       샌드박스가 아니라 대리자라, this._l 로 모으면 검사에서 못 찾습니다. */
+  const winL={};
   const sandbox={
     console,
     document:{
@@ -78,12 +83,21 @@ function run(opts={}){
     localStorage:{ getItem:k=>store.has(k)?store.get(k):null,
                    setItem:(k,v)=>store.set(k,String(v)) },
     matchMedia:()=>({ matches:!!opts.coarse }),
-    navigator:{ userAgent: opts.ua || "Mozilla/5.0 (Linux; Android 13)", standalone:false },
+    navigator:{ userAgent: opts.ua || "Mozilla/5.0 (Linux; Android 13)", standalone:false,
+                getGamepads:()=>pads, vibrate(){} },
     getComputedStyle:()=>({ top:"0px",left:"0px",bottom:"0px",right:"0px",fontSize:"13px" }),
-    requestAnimationFrame:()=>1, cancelAnimationFrame(){},
+    /* ★ 그림 프레임도 적어뒀다가 검사에서 직접 돌립니다.
+         전에는 절대 안 불려서, 프레임마다 도는 코드(게임패드 읽기 등)가
+         한 줄도 실행되지 않았습니다. */
+    requestAnimationFrame:(f)=>{ rafQ.push(f); return rafQ.length; },
+    cancelAnimationFrame:(h)=>{ if(rafQ[h-1]) rafQ[h-1]=null; },
+    /* 꽂힌 게임패드. 검사에서 r.pads 로 갈아끼웁니다. */
+    navigatorPads:[],
     /* ★ 이게 없으면 게임 시작이 조용히 실패합니다 (한참 못 찾았습니다) */
     setInterval:()=>1, clearInterval(){},
-    addEventListener(){},
+    /* ★ 예전에는 빈 함수라 window 에 붙인 손이 전부 사라졌습니다.
+         그래서 "게임패드가 꽂혔다" 같은 알림을 검사에서 쏠 수가 없었습니다. */
+    addEventListener:(t,f)=>{ (winL[t]=winL[t]||[]).push(f); },
     /* ★ 예전에는 setTimeout 이 아무것도 안 하고 0 만 돌려줬습니다.
          그러면 "길게 누르기" 나 "잠깐 쉬었다 계속" 같은 코드가
          **영원히 오지 않는 약속을 기다리며** 조용히 멈춥니다.
@@ -138,7 +152,15 @@ function run(opts={}){
       if(!ran) break;
     }
   };
-  return { sandbox, els, err, read, timers, flush };
+  /* 한 프레임 돌립니다 (게임패드 읽기가 여기서 돕니다) */
+  const frame = (n=1) => {
+    for(let k=0;k<n;k++){
+      const q=rafQ.slice(); rafQ.length=0;
+      for(const f of q){ if(f) try{ f(); }catch(e){} }
+    }
+  };
+  const emit = (t,ev) => (winL[t]||[]).forEach(f=>f(ev||{}));
+  return { sandbox, els, err, read, timers, flush, pads, frame, winL, emit };
 }
 
 /* 목록의 한 줄을 흉내냅니다. 진짜 DOM 이 없어서 closest 를 손으로 만듭니다. */
@@ -169,7 +191,7 @@ const wait = async (n=6) => { for(let i=0;i<n;i++) await new Promise(r=>setTimeo
 
 console.log("\n[1] 화면이 뜨는가");
 { const r=run();
-  ok("코드가 끝까지 돔", !r.err, r.err && r.err.message);
+  ok("코드가 끝까지 돔", !r.err, r.err && (r.err.message+" @ "+(r.err.stack||"").split("\n")[1]));
   ok("ui 가 만들어짐", !!r.read("ui"));
   ok("십자키가 붙음", !!r.read("pad"));
   ok("첫 화면이 그려짐", /SELECT SYSTEM/.test(r.els.page.innerHTML), r.els.page.innerHTML.slice(0,40));
@@ -541,6 +563,75 @@ console.log("\n[5-5c] ★★ 나가는 길 — MENU → EXIT 하나뿐");
   r.read("ui.play()"); await wait(12);
   ok("(준비) 게임 중이거나 목록", r.read("ui.state.screen")!=="top", r.read("ui.state.screen"));
   ok("★ 게임 화면에서 openTop 은 거부됨", r.read("ui.openTop()")===false);
+}
+
+console.log("\n[5-5d] ★★ 블루투스 게임패드가 화면에 실제로 이어졌는가");
+{ const mkPad = (down=[], axes=[0,0,0,0]) => ({
+    buttons: Array.from({length:17}, (_,i)=>({ pressed:down.indexOf(i)>=0,
+                                               value:down.indexOf(i)>=0?1:0 })),
+    axes });
+  const r=run();
+  r.read("ui.pickSystem('gb')"); await wait(); r.read("draw()");
+  ok("(준비) 목록 화면, 커서 0", r.read("ui.state.cursor")===0);
+
+  /* 패드를 꽂습니다 */
+  r.pads.push(mkPad());
+  /* 브라우저가 "꽂혔다" 고 알려주는 순간을 흉내냅니다 */
+  r.emit("gamepadconnected");
+  ok("★ 꽂힌 걸 화면에 알려줌", r.els.diag.textContent==="GAMEPAD",
+     r.els.diag.textContent);
+  r.frame();
+  ok("★ 프레임이 돌기 시작함", r.read("gpRaf")>0, r.read("gpRaf"));
+
+  /* 십자키 아래를 누릅니다 */
+  r.pads[0] = mkPad([13]);
+  r.frame(); await wait();
+  ok("★★ 패드 십자키로 커서가 내려감", r.read("ui.state.cursor")===1, r.read("ui.state.cursor"));
+
+  /* 계속 누르고 있어도 한 칸만 (1초에 60번 눌리면 안 됩니다)
+     ★ 프레임 수를 목록 길이와 다르게 잡습니다. 같으면 한 바퀴 돌아
+       제자리로 와서, 고장나도 통과하는 가짜 검사가 됩니다. */
+  const rows = (r.read("ui.list()")||[]).length;
+  r.frame(rows + 2); await wait();
+  ok("★★ 누르고 있어도 한 칸만", r.read("ui.state.cursor")===1,
+     r.read("ui.state.cursor") + " (목록 " + rows + "줄, " + (rows+2) + "프레임)");
+
+  /* 뗐다가 다시 누르면 또 내려갑니다 */
+  r.pads[0] = mkPad();       r.frame(); await wait();
+  r.pads[0] = mkPad([13]);   r.frame(); await wait();
+  ok("★ 뗐다 누르면 또 감", r.read("ui.state.cursor")===2, r.read("ui.state.cursor"));
+
+  /* 아날로그 스틱도 */
+  r.pads[0] = mkPad();                        r.frame(); await wait();
+  r.pads[0] = mkPad([], [0,-1,0,0]);          r.frame(); await wait();
+  ok("★ 스틱 위로 올라감", r.read("ui.state.cursor")===1, r.read("ui.state.cursor"));
+
+  /* L 버튼 = MENU */
+  r.pads[0] = mkPad();                        r.frame(); await wait();
+  r.pads[0] = mkPad([4]);                     r.frame(); await wait(12);
+  ok("★★ L 버튼이 MENU 노릇을 함", r.read("ui.state.screen")==="system",
+     r.read("ui.state.screen"));
+}
+{ /* ★ 다른 앱으로 가면 멈추고, 눌린 키를 놓아야 합니다.
+       안 놓으면 돌아왔을 때 캐릭터가 한 방향으로 계속 걸어갑니다. */
+  const mkPad = (down=[]) => ({
+    buttons: Array.from({length:17}, (_,i)=>({ pressed:down.indexOf(i)>=0, value:0 })),
+    axes:[0,0,0,0] });
+  const r=run();
+  r.pads.push(mkPad([15]));                 /* 오른쪽을 누른 채 */
+  r.emit("gamepadconnected");
+  r.frame();
+  ok("(준비) 오른쪽이 눌려 있음", (r.read("gpPrev")||[]).join(",")==="right",
+     (r.read("gpPrev")||[]).join(","));
+
+  /* ★ "놓았는가" 는 gpPrev 로 못 봅니다 — 어차피 비워지니까요.
+       실제로 **뗌 신호가 나갔는지**를 봐야 합니다. */
+  r.read("__log = []; onPress = function(n,d){ __log.push(n + (d ? '+' : '-')); };");
+  r.sandbox.document.visibilityState="hidden";
+  (r.sandbox.document._l.visibilitychange||[]).forEach(f=>f());
+  ok("★★ 나가면 **뗌 신호를 실제로 보냄**", (r.read("__log")||[]).join(",")==="right-",
+     (r.read("__log")||[]).join(","));
+  ok("★ 프레임도 멈춤", r.read("gpRaf")===0, r.read("gpRaf"));
 }
 
 console.log("\n[5-6] ★ 폴더째 넣기 (여러 개)");

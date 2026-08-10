@@ -6,8 +6,9 @@ const ok = (name, cond, extra) => { if(cond){pass++; console.log("  OK   "+name)
 function fresh(opt){
   F.reset();
   const dom = F.makeDom();
-  delete require.cache[require.resolve("/sessions/quirky-bold-heisenberg/mnt/Daniel_Tempad/web/game/game.js")];
-  const G = require("/sessions/quirky-bold-heisenberg/mnt/Daniel_Tempad/web/game/game.js");
+  /* 어느 컴퓨터에서 돌려도 되게 이 파일 기준 상대 경로로 찾는다 */
+  delete require.cache[require.resolve("../game.js")];
+  const G = require("../game.js");
   const mod = F.makeModule(opt||{});
   const rom = new Uint8Array(0x8000);
   const title = "TVA TEST";

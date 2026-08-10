@@ -241,6 +241,64 @@ Pad.prototype = {
   },
 };
 
-const PadApi = { Pad, toDir, toDirs, DEAD, ON, KEEP, DIAG, RADIUS, DIRS };
+/* ==========================================================================
+   진짜 게임패드 (블루투스 컨트롤러)
+
+   유리판 십자키는 손끝에 걸리는 턱이 없어서, 아무리 다듬어도 진짜
+   십자키를 못 이깁니다. 브라우저에 표준 규격이 있으니 그걸 씁니다.
+
+   [ 버튼 번호는 표준으로 정해져 있습니다 ]
+     0 아래(A위치)  1 오른쪽  2 왼쪽  3 위
+     4 L  5 R  6 L2  7 R2   8 SELECT  9 START
+     12 위  13 아래  14 왼쪽  15 오른쪽 (십자키)
+     축 0 = 좌우, 축 1 = 위아래 (아날로그 스틱)
+
+   ★ 게임보이는 A 가 **오른쪽**, B 가 왼쪽입니다.
+     엑스박스 패드의 아래 버튼(0번)은 위치상 왼쪽 아래라 B 로 놓습니다.
+     헷갈리지 않게 위·아래 두 개를 B, 좌·우 두 개를 A 로 겹쳐 둡니다.
+     어느 걸 눌러도 되게 하는 편이 아이한테 낫습니다.
+   ========================================================================== */
+const GP_DEAD = 0.5;          /* 아날로그 스틱을 이만큼 밀어야 방향으로 침 */
+const GP_MAP = [
+  [0, "B"], [2, "B"], [3, "B"],
+  [1, "A"],
+  [8, "select"], [9, "start"],
+  [12, "up"], [13, "down"], [14, "left"], [15, "right"],
+  /* L·R 은 MENU — 게임 중에 패드만으로 저장·나가기까지 되게 */
+  [4, "menu"], [5, "menu"],
+];
+
+/* 지금 눌려 있는 것들을 이름으로 돌려줍니다 (정렬된 배열).
+   pads 는 navigator.getGamepads() 가 준 것 그대로 넣으면 됩니다. */
+function gamepadHeld(pads) {
+  const now = new Set();
+  for (const p of (pads || [])) {
+    if (!p) continue;
+    const bs = p.buttons || [];
+    for (const [i, name] of GP_MAP) {
+      const b = bs[i];
+      /* 아날로그 트리거는 pressed 대신 value 로 오는 패드가 있습니다 */
+      if (b && (b.pressed || (typeof b === "number" ? b > 0.5 : b.value > 0.5)))
+        now.add(name);
+    }
+    const ax = p.axes || [];
+    const x = Number(ax[0]) || 0, y = Number(ax[1]) || 0;
+    if (x < -GP_DEAD) now.add("left"); else if (x > GP_DEAD) now.add("right");
+    if (y < -GP_DEAD) now.add("up");   else if (y > GP_DEAD) now.add("down");
+  }
+  return [...now].sort();
+}
+
+/* 지난번과 견줘서 **바뀐 것만** 알려줍니다.
+   ★ 이게 없으면 1초에 60번씩 "눌렸다"고 보내게 됩니다. */
+function gamepadEdges(prev, now) {
+  const out = [];
+  for (const n of now)  if (prev.indexOf(n) < 0) out.push([n, true]);
+  for (const n of prev) if (now.indexOf(n)  < 0) out.push([n, false]);
+  return out;
+}
+
+const PadApi = { Pad, toDir, toDirs, gamepadHeld, gamepadEdges,
+                 DEAD, ON, KEEP, DIAG, RADIUS, DIRS, GP_DEAD, GP_MAP };
 if (typeof window !== "undefined") window.GamePad4 = PadApi;
 if (typeof module !== "undefined" && module.exports) module.exports = PadApi;

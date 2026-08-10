@@ -15,6 +15,11 @@
 function makeIDB(opts) {
   opts = opts || {};
   const dbs = new Map();          /* 이름 → { ver, stores: Map(name → Map(key→값)) } */
+  /* ★ 진짜 IndexedDB 는 같은 저장소를 건드리는 **쓰기 트랜잭션을 줄 세웁니다.**
+       (명세: 먼저 만들어진 것이 먼저 접근) 이걸 안 흉내내면
+       "동시에 저장하면 한쪽이 사라진다" 같은 문제를 잘못 판정합니다.
+       실제로 이것 때문에 멀쩡한 코드를 버그로 오해할 뻔했습니다. */
+  const queues = new Map();       /* 저장소 이름 → 지금 도는 쓰기 트랜잭션의 약속 */
 
   const later = fn => setTimeout(fn, 0);
 
@@ -27,17 +32,43 @@ function makeIDB(opts) {
     const run = (fn) => {
       const req = makeRequest();
       tx._pending++;
-      later(() => {
+      /* ★ 앞의 쓰기 트랜잭션이 끝나기를 기다립니다 (진짜와 같게) */
+      (tx._gate || Promise.resolve()).then(() => later(() => {
         try { req.result = fn(); }
         catch (e) { req.error = e; tx._fail(e); tx._pending--; tx._maybeDone(); return; }
         if (req.onsuccess) req.onsuccess({ target: req });
         tx._pending--; tx._maybeDone();
-      });
+      }));
       return req;
     };
     return {
       get:    k => run(() => map.has(k) ? clone(map.get(k)) : undefined),
       getAll: () => run(() => [...map.values()].map(clone)),
+      /* ★ 커서. RomStore.list 가 이걸로 한 개씩 훑습니다
+           (한 번에 다 읽으면 폰 메모리가 터지기 때문에).
+           진짜와 같게 **한 칸씩 나아가고, 끝나면 undefined** 를 줍니다. */
+      openCursor: () => {
+        const keys = [...map.keys()];
+        const req = makeRequest();
+        let at = 0;
+        const step = () => {
+          tx._pending++;
+          (tx._gate || Promise.resolve()).then(() => later(() => {
+            if (at >= keys.length) req.result = undefined;
+            else {
+              const k = keys[at++];
+              req.result = {
+                key: k, value: clone(map.get(k)),
+                continue: () => step(),
+              };
+            }
+            if (req.onsuccess) req.onsuccess({ target: req });
+            tx._pending--; tx._maybeDone();
+          }));
+        };
+        step();
+        return req;
+      },
       put:    v => run(() => {
         if (opts.putFails) throw new Error("QuotaExceededError");
         const k = v[keyPath];
@@ -82,10 +113,12 @@ function makeIDB(opts) {
             db.stores.get(n)._keyPath = (o && o.keyPath) || "id";
             return makeStore(db.stores.get(n), db.stores.get(n)._keyPath, dummyTx());
           },
-          transaction(n) {
+          transaction(n, mode) {
             const map = db.stores.get(n);
             if (!map) throw new Error("NotFoundError: " + n);
+            const rw = mode === "readwrite";
             const tx = {
+              _mode: mode || "readonly",
               _pending: 0, _done: false, _err: null,
               oncomplete: null, onerror: null, onabort: null,
               _fail(e) { tx._err = e; },
@@ -99,8 +132,24 @@ function makeIDB(opts) {
               },
               objectStore() { return makeStore(map, map._keyPath || "id", tx); },
             };
+            /* ★ 쓰기 트랜잭션은 앞의 것이 끝나야 시작합니다 */
+            const prev = rw ? (queues.get(n) || Promise.resolve()) : Promise.resolve();
+            let release;
+            if (rw) queues.set(n, new Promise(r => { release = r; }));
+            tx._gate = prev;
+            tx._release = release || (() => {});
+            const origDone = tx._maybeDone;
+            tx._maybeDone = function(){
+              if (tx._done || tx._pending > 0) return;
+              tx._done = true;
+              later(() => {
+                if (tx._err) { tx.error = tx._err; if (tx.onerror) tx.onerror(); }
+                else if (tx.oncomplete) tx.oncomplete();
+                tx._release();
+              });
+            };
             /* 요청이 하나도 없어도 끝나야 합니다 */
-            later(() => tx._maybeDone());
+            prev.then(() => later(() => tx._maybeDone()));
             return tx;
           },
           close() {},

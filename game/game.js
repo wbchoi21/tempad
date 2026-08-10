@@ -73,6 +73,9 @@ function tintOrange(data) {
     const lum = (data[i] * 299 + data[i+1] * 587 + data[i+2] * 114) / 1000 | 0;
     const k = (lum > 255 ? 255 : lum) * 3;
     data[i] = TINT[k]; data[i+1] = TINT[k+1]; data[i+2] = TINT[k+2];
+    data[i+3] = 255;              /* ★ 투명도를 못 박습니다.
+       createImageData 는 전부 투명(0)으로 시작합니다. 에뮬레이터가 255 를
+       채워주는 걸 확인했지만, 하나라도 어긋나면 화면이 통째로 안 보입니다. */
   }
   return data;
 }
@@ -98,8 +101,17 @@ function openDB() {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath:"id" });
     };
-    req.onsuccess = () => ok(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      /* ★ 나중에 판을 올릴 때, 다른 탭이 옛 판을 붙들고 있으면
+           그쪽이 비켜줘야 합니다. 안 그러면 열기가 영영 안 끝나고
+           목록 화면이 빈 채로 멈춥니다. */
+      db.onversionchange = () => { try { db.close(); } catch (e) {} };
+      ok(db);
+    };
     req.onerror   = () => no(req.error);
+    /* ★ 이미 막혀 있으면 알려주고 끝냅니다. 이게 없으면 영영 기다립니다. */
+    req.onblocked = () => no(new Error("db-blocked"));
   });
 }
 
@@ -111,10 +123,16 @@ function openDB() {
 function tx(db, mode, fn) {
   return new Promise((ok, no) => {
     const t = db.transaction(STORE, mode);
+    /* ★ 실패 사유는 **요청** 쪽에서 가져와야 합니다.
+         t.error 는 onerror 가 불리는 시점엔 아직 비어 있습니다(명세).
+         그래서 전에는 "용량이 꽉 찼다" 를 null 로 받아,
+         무엇이 잘못됐는지 영영 알 수 없었습니다. */
+    let why = null;
     const r = fn(t.objectStore(STORE));
+    if (r) r.onerror = ev => { why = (ev && ev.target && ev.target.error) || why; };
     t.oncomplete = () => ok(r ? r.result : undefined);
-    t.onerror    = () => no(t.error);
-    t.onabort    = () => no(t.error);
+    t.onerror    = () => no(why || t.error || new Error("db-error"));
+    t.onabort    = () => no(why || t.error || new Error("db-abort"));
   });
 }
 
@@ -168,8 +186,44 @@ function looksLikeGb(bytes) {
   return true;
 }
 
+/* 한 개씩 훑으면서 **목록에 필요한 것만** 뽑아옵니다.
+   롬 내용(수 MB)은 뽑은 즉시 버려지므로 메모리에 쌓이지 않습니다. */
+function listByCursor(db) {
+  return new Promise((ok, no) => {
+    const t = db.transaction(STORE, "readonly");
+    const s = t.objectStore(STORE);
+    if (!s.openCursor) {            /* 커서가 없으면 예전 방식으로 */
+      const r = s.getAll();
+      t.oncomplete = () => ok(r.result || []);
+      t.onerror = t.onabort = () => no(t.error || new Error("db-error"));
+      return;
+    }
+    const out = [];
+    const r = s.openCursor();
+    r.onsuccess = ev => {
+      const c = ev.target.result;
+      if (!c) return;
+      const v = c.value || {};
+      /* ★ 여기서 필요한 것만 베껴 담습니다. v(롬 포함)는 곧 버려집니다. */
+      out.push({ id:v.id, title:v.title, file:v.file, fromBundled:v.fromBundled || null,
+                 size:v.size, sram:!!v.sram,
+                 states:(v.states || [null,null,null]).map(x => !!x),
+                 added:v.added, played:v.played });
+      c.continue();
+    };
+    let why = null;
+    r.onerror = ev => { why = (ev && ev.target && ev.target.error) || why; };
+    t.oncomplete = () => ok(out);
+    t.onerror = t.onabort = () => no(why || t.error || new Error("db-error"));
+  });
+}
+
 const RomStore = {
-  async add(bytes, fileName) {
+  /* extra 에 { fromBundled:"tobu.gb" } 를 넘기면 "기본 게임에서 나온 기록"
+     이라고 표시해 둡니다. 목록에서 기본 게임과 짝을 맞출 때 씁니다.
+     ★ 파일 이름으로 짝을 맞추면 안 됩니다 — 같은 이름의 남의 롬이
+       기본 게임을 목록에서 밀어냅니다. */
+  async add(bytes, fileName, extra) {
     /* ★ 아래 모든 함수는 실패해도 반드시 연결을 닫습니다 (finally).
          전에는 성공했을 때만 닫아서, 저장이 실패할 때마다 연결이 쌓였습니다. */
     const id = romKey(bytes);
@@ -178,6 +232,7 @@ const RomStore = {
       size: bytes.length, rom: bytes,
       sram: null, states: [null, null, null],
       added: Date.now(), played: 0,
+      fromBundled: (extra && extra.fromBundled) || null,
     };
     const db = await openDB();
     try {
@@ -196,6 +251,8 @@ const RomStore = {
            ("TOBU TOBU GIRL" → "TOBU"). */
       rec.file   = cur.file || rec.file;
       rec.title  = cur.title || rec.title;
+      /* 기본 게임 표시도 지웁니다 — 한 번 붙으면 계속 붙어 있어야 합니다 */
+      rec.fromBundled = cur.fromBundled || rec.fromBundled;
     }
     await tx(db, "readwrite", s => s.put(rec));
     return rec;
@@ -204,7 +261,16 @@ const RomStore = {
   async list() {
     const db = await openDB();
     let all;
-    try { all = await tx(db, "readonly", s => s.getAll()); }
+    try {
+      /* ★★ 전에는 getAll() 이었습니다. 그게 **롬 내용까지 전부** 한 번에
+             메모리로 끌어올립니다. 게임 20개면 괜찮지만 200개면 100MB 가
+             넘어가고, 폰에서는 화면이 몇 초씩 멎거나 탭이 그냥 죽습니다.
+             목록에 들어갈 때마다 매번 그럽니다.
+
+             커서로 한 개씩 훑으면 **한 번에 한 개만** 메모리에 올라옵니다.
+             (오래된 브라우저나 검사용 가짜에 커서가 없으면 예전 방식으로.) */
+      all = await listByCursor(db);
+    }
     finally { db.close(); }
     const arr = all || [];
     /* 목록에는 롬 내용을 빼고 줍니다 (몇 MB 를 들고 다닐 필요가 없습니다).
@@ -214,6 +280,7 @@ const RomStore = {
     for (const r of arr) {
       try {
         out.push({ id:r.id, title:r.title || "UNTITLED", file:r.file || "",
+                   fromBundled: r.fromBundled || null,
                    size:r.size || 0, hasSram: !!r.sram,
                    states: (r.states || [null,null,null]).map(x => !!x),
                    added:r.added || 0, played:r.played || 0 });
@@ -228,15 +295,33 @@ const RomStore = {
       return r || null;
     } finally { db.close(); }
   },
-  async patch(id, changes) {
-    const db = await openDB();
-    try {
-      const rec = await tx(db, "readonly", s => s.get(id));
-      if (!rec || !rec.id) return null;
-      Object.assign(rec, changes);
-      await tx(db, "readwrite", s => s.put(rec));
-      return rec;
-    } finally { db.close(); }
+  /* ★★ 읽고-고치고-쓰기를 **하나의 트랜잭션 안에서** 합니다. ★★
+
+     전에는 읽기와 쓰기가 서로 다른 트랜잭션이었습니다. 그 사이가 무방비라,
+     아드님이 슬롯 저장을 누른 그 순간 게임이 배터리 세이브를 하면
+     **둘 중 하나가 조용히 사라졌습니다.** 1초마다 도는 자동저장과
+     겹치기 아주 쉬운 구조였습니다.
+
+     한 트랜잭션 안에 넣으면 그 사이에 아무도 끼어들 수 없고,
+     중간에 실패하면 되돌려집니다.                                      */
+  patch(id, changes) {
+    return openDB().then(db => new Promise((ok, no) => {
+      let out = null, why = null;
+      const t = db.transaction(STORE, "readwrite");
+      const st = t.objectStore(STORE);
+      const g = st.get(id);
+      g.onerror = ev => { why = ev && ev.target && ev.target.error; };
+      g.onsuccess = () => {
+        const rec = g.result;
+        if (!rec || !rec.id) return;              /* 없으면 아무것도 안 씁니다 */
+        Object.assign(rec, changes);
+        out = rec;
+        const w = st.put(rec);
+        w.onerror = ev => { why = ev && ev.target && ev.target.error; };
+      };
+      t.oncomplete = () => { db.close(); ok(out); };
+      t.onerror = t.onabort = () => { db.close(); no(why || t.error || new Error("db-error")); };
+    }));
   },
   async remove(id) {
     const db = await openDB();
@@ -415,7 +500,10 @@ class Session {
     this.schedule();
     /* ★ 두 번 불러도 타이머가 하나만 남게. 전에는 앞의 것이 영원히 새어나갔습니다. */
     if (this.sramTimer) clearInterval(this.sramTimer);
-    this.sramTimer = setInterval(() => this.flushSram(), 1000);
+    /* ★ 3초로 늦췄습니다. 한 번 저장할 때 기록 전체(롬 포함)를 다시 쓰기 때문에
+         1초마다 하면 폰이 뜨거워집니다. 바뀐 게 있을 때만 쓰고,
+         멈추거나 나갈 때 반드시 한 번 더 하므로 잃는 것은 없습니다. */
+    this.sramTimer = setInterval(() => this.flushSram(), 3000);
   }
 
   pause() {
@@ -436,7 +524,7 @@ class Session {
     if (ctx && ctx.resume) ctx.resume();
     this.lastRafSec = 0;
     this.schedule();
-    if (!this.sramTimer) this.sramTimer = setInterval(() => this.flushSram(), 1000);
+    if (!this.sramTimer) this.sramTimer = setInterval(() => this.flushSram(), 3000);
   }
 
   /* ── 저장 ─────────────────────────────────────────────────────────── */
@@ -638,6 +726,17 @@ const GameMode = {
 
   stop: hardStop,
   epoch: () => epoch,
+  /* ★ 아이폰은 **손가락이 닿는 그 순간(동기 실행 구간)** 에 소리 장치를
+       깨워야 소리가 납니다. 우리는 게임을 시작할 때 깨우는데,
+       그때는 롬 읽기와 wasm 준비를 기다린 뒤라 이미 늦습니다.
+       그래서 화면 어디든 처음 누를 때 미리 깨워둡니다.
+       안드로이드는 상관없지만 아이폰에서는 이게 있어야 소리가 납니다. */
+  wakeAudio() {
+    try {
+      const c = getAudioCtx();
+      if (c && c.state === "suspended" && c.resume) c.resume();
+    } catch (e) {}
+  },
   /* 세션이 사라지면 불러줄 곳을 등록합니다 (화면이 목록으로 빠져나오게) */
   setOnGone(fn) { onGone = fn; },
   current: () => session,

@@ -28,7 +28,7 @@ const cells=(s.match(/<div class="icon-cell"/g)||[]).length;
 chk("홈 아이콘 4개 (2x2)", cells===4, cells+"개");
 
 /* 게임으로 가는 길 */
-chk("왼쪽 세로줄 게임 버튼", js.includes('location.href = "game/"'));
+chk("왼쪽 세로줄 게임 버튼", js.includes('goPage("game/")'));
 chk("메뉴 목록에도 있음", s.includes('data-url="game/"'));
 chk("게임 버튼이 디렉토리 위에 있음",
     s.indexOf('id="btnGames"') < s.indexOf('id="btnDir"'));
@@ -38,6 +38,60 @@ chk("serviceWorker 있는지 확인하고 씀", /"serviceWorker" in navigator/.t
 chk("★ updateViaCache 꺼둠 (안 그러면 하루까지 옛것)", /updateViaCache/.test(js));
 chk("★ 다시 켜기는 한 번만 (무한 새로고침 방지)", /reloaded\s*=\s*true/.test(js));
 chk("켤 때마다 새것 확인", /reg\.update\(\)/.test(js));
+
+/* ★★ 정의되지 않은 함수를 부르는 곳이 있는가 ★★
+     실제로 `exitFull()` 이 정의도 없이 불리고 있었고, try 가 오류를 삼켜서
+     **전체화면이 한 번도 안 풀렸습니다.** 아무 증상 없이 조용히 실패합니다.
+     점 없이 부르는 이름만 봅니다 (메서드는 제외).                        */
+{
+  const stripped = js
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/.*$/gm, " ")
+    .replace(/`(?:\\.|[^`\\])*`/g, "``")
+    .replace(/"(?:\\.|[^"\\])*"/g, '""')
+    .replace(/'(?:\\.|[^'\\])*'/g, "''");
+
+  const defined = new Set();
+  for (const m of stripped.matchAll(/(?:^|[^.\w])(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/g)) defined.add(m[1]);
+  for (const m of stripped.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g)) defined.add(m[1]);
+  for (const m of stripped.matchAll(/(?:function|catch)\s*\(([^)]*)\)/g))
+    m[1].split(",").forEach(a => { const n=a.trim().split(/[=\s]/)[0]; if(n) defined.add(n); });
+  for (const m of stripped.matchAll(/([A-Za-z_$][\w$]*)\s*=>/g)) defined.add(m[1]);
+
+  const GLOBALS = new Set(["setTimeout","clearTimeout","setInterval","clearInterval","parseFloat","parseInt",
+    "requestAnimationFrame","cancelAnimationFrame","addEventListener","removeEventListener","fetch",
+    "encodeURIComponent","decodeURIComponent","getComputedStyle","matchMedia","isFinite","isNaN",
+    "alert","confirm","prompt","structuredClone","queueMicrotask","btoa","atob","Number","String",
+    "Boolean","Array","Object","Date","Math","JSON","Promise","Error","Map","Set","RegExp","Symbol",
+    "Image","Audio","Blob","URL","FileReader","AudioContext","webkitAudioContext","Uint8Array",
+    "Int8Array","Uint8ClampedArray","Float32Array","DOMParser","AbortController","Intl","if","for",
+    "while","switch","catch","return","typeof","new","function","await","super","import","do",
+    /* 글자열 안에 섞여 들어오는 CSS 함수들 */
+    "calc","rgba","rgb","url","translate","scale","rotate","var","env","min","max","clamp"]);
+
+  const bad = new Set();
+  for (const m of stripped.matchAll(/(^|[^.\w$])([a-z_$][\w$]*)\s*\(/g)) {
+    const n = m[2];
+    if (!defined.has(n) && !GLOBALS.has(n)) bad.add(n);
+  }
+  chk("★ 정의 없는 함수를 부르는 곳이 없음", bad.size === 0, [...bad].join(", "));
+}
+
+/* ★ 종료 — 누르면 무조건 나가야 합니다 */
+chk("전체화면 풀기 함수가 실제로 있음", /function exitFull\(/.test(js));
+chk("★ 종료할 때 전체화면을 품", /isFull\(\)\s*\)\s*await exitFull/.test(js) || /isFull\(\) *\) *exitFull/.test(js));
+chk("전체화면 풀기에 시간 제한이 있음", /setTimeout\(finish/.test(js));
+chk("종료에 RESTART 버튼이 없음", !/sdRestart/.test(s),
+    "끄기인데 '다시 시작' 버튼이 있으면 뜻이 어긋납니다");
+chk("창 닫기를 시도함", /window\.close\(\)/.test(js));
+chk("★ 안 닫히면 아예 떠남", /about:blank/.test(js));
+chk("★ 뒤로가기로 못 돌아오게 replace 사용", /location\.replace\("about:blank"\)/.test(js));
+chk("나가기 전 화면을 검게", /shutdown\(\)/.test(js));
+/* ★ 화면을 옮길 때 기록을 남기지 않아야 종료가 계속 됩니다.
+     기록이 쌓이면 브라우저가 창 닫기를 거부합니다. */
+chk("★ 게임으로 갈 때 replace 사용", /location\.replace\(url\)/.test(js));
+chk("★ href 로 옮기는 곳이 없음",
+    !/location\.href\s*=\s*["'][^"']*game/.test(js), "기록이 쌓입니다");
 
 /* 판 번호 */
 const b=(js.match(/const BUILD = "([^"]+)"/)||[])[1];

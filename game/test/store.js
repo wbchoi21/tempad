@@ -89,6 +89,33 @@ console.log("\n[4] ★ 낡은 기록 하나가 목록 전체를 망가뜨리면 
      legacy?JSON.stringify(legacy.states):"없음");
 }
 
+console.log("\n[4-2] ★★ 동시에 저장해도 한쪽이 사라지면 안 됨");
+{ const G=fresh();
+  const a=await G.RomStore.add(gbRom(9,"RACE"),"race.gb");
+  /* 슬롯 저장과 배터리 세이브가 겹치는 상황.
+     아드님이 저장을 누른 그 순간 게임이 스스로 저장하면 실제로 일어납니다. */
+  await Promise.all([
+    G.RomStore.patch(a.id,{ states:[new Uint8Array([1]),null,null] }),
+    G.RomStore.patch(a.id,{ sram:new Uint8Array([2,2]) }),
+  ]);
+  const after=await G.RomStore.get(a.id);
+  ok("★ 슬롯 저장이 살아있음", !!(after.states && after.states[0]),
+     "슬롯 "+JSON.stringify(after.states && after.states.map(x=>!!x)));
+  ok("★ 배터리 세이브도 살아있음", !!(after.sram && after.sram.length===2),
+     "sram "+(after.sram?after.sram.length+"바이트":"null"));
+
+  /* 세 개 동시 */
+  const b=await G.RomStore.add(gbRom(10,"RACE3"),"r3.gb");
+  await Promise.all([
+    G.RomStore.patch(b.id,{ states:[new Uint8Array([1]),null,null] }),
+    G.RomStore.patch(b.id,{ sram:new Uint8Array([2]) }),
+    G.RomStore.patch(b.id,{ played:7 }),
+  ]);
+  const c=await G.RomStore.get(b.id);
+  ok("★ 셋 다 살아있음", !!(c.states&&c.states[0]) && !!c.sram && c.played===7,
+     `슬롯 ${!!(c.states&&c.states[0])} sram ${!!c.sram} 횟수 ${c.played}`);
+}
+
 console.log("\n[5] 지우기");
 { const G=fresh();
   const a=await G.RomStore.add(gbRom(3,"DEL"),"a.gb");

@@ -44,8 +44,11 @@ html,body{
 /* 게임이 안 돌 때 이 위에 목록·메뉴를 그립니다 */
 /* 목록이 화면보다 길어질 수 있어 스크롤을 켭니다.
    막대는 숨깁니다 — 기기처럼 보여야 하니까요. */
+/* ★ body 는 touch-action:none 이라 손가락 스크롤이 막혀 있습니다.
+     게임이 20개씩 되면 십자키로만 내려가야 해서 답답합니다.
+     여기만 위아래 쓸기를 허락합니다 (좌우는 여전히 막습니다). */
 #page{ position:absolute; overflow-y:auto; overflow-x:hidden; padding:6px 8px;
-       scrollbar-width:none; }
+       scrollbar-width:none; touch-action:pan-y; -webkit-overflow-scrolling:touch; }
 #page::-webkit-scrollbar{ display:none; }
 #page h2{ font-size:calc(var(--fs) * .85); letter-spacing:2px; color:var(--or);
           border-bottom:1px solid var(--dim); padding-bottom:3px; margin-bottom:5px; }
@@ -60,6 +63,21 @@ html,body{
 .row.one .sub{ margin-left:auto; font-size:calc(var(--fs) * .62); }
 .row.sel .sub{ color:var(--bg); opacity:.8; }
 #page .empty{ font-size:calc(var(--fs) * .78); color:var(--dim); line-height:1.7; margin-top:6px; }
+/* 길게 누르는 동안 차오르는 막대 — "누르고 있으면 뭔가 된다"를 보여줍니다 */
+/* ★ 막대는 실제 시간(0.9초)보다 조금 빨리 찹니다.
+     꽉 찬 뒤에도 잠깐 여유가 있어야 "어, 이거 지워지겠다" 하고 뗄 수 있습니다.
+     막대가 차는 순간이 곧 발동이면 경고 구간이 없는 셈입니다. */
+.row .hold{ height:2px; background:var(--or); width:0; margin-top:2px;
+            transition:width .65s linear; }
+.row.holding .hold{ width:100%; }
+/* 고른 줄은 바탕이 주황이라 같은 색 막대가 안 보입니다 */
+.row.sel .hold{ background:var(--bg); }
+/* 지울까 물어보는 화면 */
+#page .ask{ font-size:calc(var(--fs) * .78); color:var(--or); line-height:1.6; margin-top:6px; }
+#page .ask b{ display:block; color:var(--bg); background:var(--or);
+              padding:1px 3px; margin:4px 0; white-space:nowrap;
+              overflow:hidden; text-overflow:ellipsis; }
+#page .ask .warn{ color:var(--dim); }
 
 /* ── 좌우 판 ───────────────────────────────────────────────────────── */
 .pane{ position:absolute; top:0; bottom:0; }
@@ -116,7 +134,7 @@ html,body{
 #rot{ position:fixed; inset:0; display:none; background:var(--bg);
       align-items:center; justify-content:center; font-size:14px; letter-spacing:2px; z-index:99; }
 @media (orientation:portrait){ #rot{ display:flex; } #dev{ visibility:hidden; } }
-#file{ display:none; }
+#file,#dir{ display:none; }
 </style>
 </head>
 <body>
@@ -156,7 +174,11 @@ html,body{
 </div>
 
 <div id="rot">TURN THE DEVICE SIDEWAYS</div>
-<input type="file" id="file" accept=".gb,.gbc">
+<!-- 파일 하나 또는 여러 개 -->
+<input type="file" id="file" accept=".gb,.gbc" multiple>
+<!-- ★ 폴더째. webkitdirectory 는 표준은 아니지만 안드로이드·PC 에서 됩니다.
+     아이폰 사파리는 속성만 있고 실제로는 안 돼서, 아래 CAN_DIR 로 가려냅니다. -->
+<input type="file" id="dir" webkitdirectory directory multiple>
 
 <!-- ★ binjgb 를 먼저 불러야 합니다. 아래에 두면 boot() 이 먼저 돌아서 못 찾습니다.
      파일이 없어도 페이지는 떠야 하므로 onerror 로 넘어갑니다. -->
@@ -183,6 +205,39 @@ let insCache    = null;
 
 const GW = 160, GH = 144, MARGIN = 12, MIN_PANE = 150;
 const $ = id => document.getElementById(id);
+
+/* ★★ 화면에 글자를 넣기 전에 반드시 이걸 거칩니다. ★★
+     게임 이름은 롬 안에서 읽거나 **파일 이름에서 가져옵니다.**
+     파일 이름은 아드님이 마음대로 지을 수 있습니다.
+     `<img onerror=...>.gb` 같은 이름이면 그게 그대로 실행됩니다.
+     장난감이라도 이건 막아둡니다. */
+function esc(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+/* ★ 폴더째 고르기가 되는 기기인지.
+     아이폰·아이패드 사파리는 webkitdirectory 속성은 있는데 실제로는
+     폴더를 못 고릅니다. 그래서 속성 검사만으로는 안 되고 기기를 봅니다.
+     (아이패드는 최근 것부터 "Macintosh" 라고 말해서 손가락 수까지 봅니다.) */
+/* ★ 지우기 확인창이 뜬 시각. 뜬 직후 잠깐은 버튼을 안 받습니다.
+     길게 누르던 손가락을 떼면서 다른 버튼이 같이 눌리는 사고를 막습니다. */
+let armAt = 0;
+const ARM_MS = 400;
+/* boot() 안에서 만드는 "길게 누르기 취소" 함수를 여기에 걸어둡니다.
+   draw() 가 화면을 새로 그릴 때 같이 꺼야 하기 때문입니다. */
+let holdCancel = null;
+
+const CAN_DIR = (() => {
+  try {
+    if (!("webkitdirectory" in document.createElement("input"))) return false;
+    const ua = navigator.userAgent || "";
+    const iOS = /iPad|iPhone|iPod/.test(ua) ||
+                (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1);
+    return !iOS;
+  } catch (e) { return false; }
+})();
 
 /* ══ 크기 맞추기 ══════════════════════════════════════════════════════
    ★ vh/vw 를 믿지 마세요. 폰마다 주소창을 포함해서 알려줍니다.
@@ -310,6 +365,10 @@ function fit(){
 
 /* ══ 그리기 ═══════════════════════════════════════════════════════════ */
 function draw(){
+  /* ★ 줄을 새로 그리면 "누르고 있음" 표시가 사라집니다.
+       그런데 시계는 살아 있어서, 아무 표시 없이 지우기 창이 튀어나옵니다.
+       (글자 크기 버튼 하나만 눌러도 이 일이 벌어졌습니다.) */
+  if (holdCancel) holdCancel();
   const st = ui.state, pg = $("page"), inf = $("info"), sc = $("screen");
   const playing = st.screen === "play";
   sc.style.visibility = playing ? "visible" : "hidden";
@@ -331,29 +390,77 @@ function draw(){
       </div><br>
       <div class="v">TO LEAVE,<br>TAP &#8249; BOTTOM LEFT</div>`;
   }
+  else if (st.screen === "list" && st.confirm){
+    /* ★ 지우기는 되돌릴 수 없습니다 (세이브까지 같이 사라집니다).
+         그래서 목록을 감추고 이 화면만 보여줍니다.
+         목록이 보이면 "어느 것을 지우는지" 헷갈립니다. */
+    pg.innerHTML = `<h2>DELETE GAME?</h2>
+      <div class="ask">
+        <b>${esc(st.confirm.title)}</b>
+        <span class="warn">THIS ALSO DELETES<br>ITS SAVES. FOREVER.<br><br>
+        PRESS START TO DELETE.<br>ANY OTHER BUTTON KEEPS IT.</span>
+      </div>`;
+    /* ★ 안전한 쪽(KEEP)을 맨 위에. 위험한 쪽은 맨 아래에.
+         그리고 지우는 건 A 가 아니라 START 입니다 — 위 onPress 참고. */
+    inf.innerHTML = `<div class="h">DELETE?</div><hr>
+      <div class="v">
+        A &nbsp;&nbsp;&nbsp;&nbsp;KEEP IT<br>
+        B &nbsp;&nbsp;&nbsp;&nbsp;KEEP IT<br>
+        MENU &nbsp;KEEP IT<br>
+        <br>
+        START DELETE
+      </div>`;
+  }
   else if (st.screen === "list"){
     const list = ui.list();
-    pg.innerHTML = "<h2>" + ui.systemName() + "</h2>" + (list.length
+    const canAdd = st.systemId === "gb";
+    pg.innerHTML = "<h2>" + esc(ui.systemName()) + "</h2>" + (list.length
       ? list.map((r,i) =>
-          `<div class="row ${i===st.cursor?"sel":""}">${r.title}<div class="sub">${
-            (r.hasSram?"SAVE ":"") + (r.states.some(Boolean)?"STATE ":"") + (r.note||"")}</div></div>`
+          /* data-i 로 몇 번째 줄인지 붙여둡니다. 길게 누르기가 이걸 봅니다. */
+          `<div class="row ${i===st.cursor?"sel":""}" data-i="${i}">${esc(r.title)}<div class="sub">${
+            esc((r.hasSram?"SAVE ":"") + (r.states.some(Boolean)?"STATE ":"") + (r.note||""))
+          }</div><div class="hold"></div></div>`
         ).join("")
-      : `<div class="empty">NO GAMES YET.<br><br>PRESS START TO ADD A FILE.</div>`);
+      : (canAdd
+          ? `<div class="empty">NO GAMES YET.<br><br>PRESS START TO ADD FILES.</div>`
+          : `<div class="empty">NOTHING HERE YET.</div>`));
+    /* ★ 파일을 받는 건 게임보이 목록뿐입니다.
+         게임&워치 목록은 저장소를 안 봐서, 거기서 받으면 "넣었다"고 해놓고
+         화면에는 아무것도 안 나옵니다. 그래서 안내조차 안 보여줍니다. */
     inf.innerHTML = `<div class="h">${list.length} GAME${list.length===1?"":"S"}</div><hr>
       <div class="v">
         &#9650;&#9660; &nbsp;MOVE<br>
-        A &nbsp;&nbsp;&nbsp;&nbsp;PLAY<br>
+        A &nbsp;&nbsp;&nbsp;&nbsp;PLAY<br>` + (canAdd ? `
         START ADD FILE<br>
-        SEL &nbsp;&nbsp;REMOVE<br>
+        SEL &nbsp;&nbsp;LIBRARY<br>` : ``) + `
         MENU &nbsp;SYSTEM
-      </div>`;
+      </div>` + (canAdd ? `<br>
+      <div class="v">LIBRARY HAS<br>ADD &amp; REMOVE</div>` : ``);
+  }
+  else if (st.screen === "library"){
+    /* 넣기·폴더넣기·지우기를 한자리에. 버튼 넷으로는 다 못 걸어서입니다. */
+    const items = ui.libraryItems(CAN_DIR);
+    pg.innerHTML = `<h2>LIBRARY</h2>` + items.map((m,i) =>
+      `<div class="row one ${i===st.cursor?"sel":""}">${m.label}<span class="sub">${esc(m.sub)}</span></div>`
+    ).join("");
+    /* ★ 아이폰은 진짜 폴더 고르기가 안 되므로, 대신 무엇을 하면 되는지 씁니다 */
+    const folderNote = CAN_DIR
+      ? `<div class="v">ADD FOLDER TAKES<br>EVERY GAME INSIDE</div>`
+      : `<div class="v">THIS PHONE CANNOT<br>PICK A FOLDER.<br>
+           OPEN IT AND SELECT<br>ALL THE FILES.</div>`;
+    inf.innerHTML = `<div class="h">LIBRARY</div><hr>
+      <div class="v">
+        &#9650;&#9660; &nbsp;MOVE<br>
+        A &nbsp;&nbsp;&nbsp;&nbsp;CHOOSE<br>
+        MENU &nbsp;BACK
+      </div><br>` + folderNote;
   }
   else if (st.screen === "menu"){
     pg.innerHTML = `<h2>PAUSED</h2>` +
       ui.menuItems().map((m,i) =>
         `<div class="row one ${i===st.cursor?"sel":""}">${m.label}<span class="sub">${m.sub}</span></div>`
       ).join("");
-    inf.innerHTML = `<div class="h">${st.title}</div><hr>
+    inf.innerHTML = `<div class="h">${esc(st.title)}</div><hr>
       <div class="v">
         &#9650;&#9660; &nbsp;MOVE<br>
         A &nbsp;&nbsp;&nbsp;&nbsp;CHOOSE<br>
@@ -362,7 +469,7 @@ function draw(){
       </div>`;
   }
   else {
-    inf.innerHTML = `<div class="h">${st.title}</div><hr>
+    inf.innerHTML = `<div class="h">${esc(st.title)}</div><hr>
       <div class="v">PLAYING</div><br>
       <div class="v">MENU BUTTON<br>&nbsp;&nbsp;SAVE / QUIT</div>`;
   }
@@ -372,6 +479,14 @@ function draw(){
        "아무 반응이 없다"고 느끼게 됩니다.                              */
   const selEl = pg.querySelector(".row.sel");
   if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block:"nearest" });
+}
+
+/* 라이브러리에서 고른 결과를 처리합니다.
+   ★ 폴더 고르기가 안 되는 기기(아이폰)에서는 파일 여러 개 고르기가 열립니다.
+     항목 자체는 없애지 않습니다 — 없으면 "내 폰엔 왜 없지" 가 됩니다. */
+function openLib(what){
+  if (what === "file")   $("file").click();
+  if (what === "folder") $(CAN_DIR ? "dir" : "file").click();
 }
 
 /* ══ 조작 ═════════════════════════════════════════════════════════════ */
@@ -391,10 +506,35 @@ function onPress(name, down){
     return;
   }
   if (st.screen === "list"){
+    /* ★ 지울까 물어보는 중에는 버튼 뜻이 완전히 달라집니다.
+         A = 지운다, 나머지 전부 = 안 지운다.
+         "안 지운다" 쪽을 넓게 잡아둡니다 — 잘못 눌러서 지워지는 것보다
+         잘못 눌러서 안 지워지는 편이 백 배 낫습니다. */
+    /* ★★ 지우는 버튼은 A 가 아니라 START 입니다. ★★
+
+       목록에서 A 는 늘 "게임 시작" 이었습니다. 그 손버릇 그대로
+       확인창에서 A 를 누르면 게임이 사라집니다. 되돌릴 수 없습니다.
+       그래서 **평소에 안 쓰던 버튼**으로 옮겼습니다.
+       A·B·SELECT·MENU 는 전부 "안 지움" 입니다. 안전한 쪽을 넓게. */
+    if (st.confirm){
+      /* ★ 창이 뜬 직후 잠깐은 아무것도 안 받습니다.
+           길게 누르던 손가락을 떼면서 다른 버튼이 같이 눌리는 걸 막습니다. */
+      if (Date.now() - armAt < ARM_MS) return;
+      if (name === "start") ui.confirmRemove().then(draw);
+      else                  { ui.cancelRemove(); draw(); }
+      return;
+    }
     if (name === "A")           ui.play().then(draw);
     else if (name === "B")      { ui.backToSystem(); draw(); }
-    else if (name === "start")  $("file").click();
-    else if (name === "select") ui.removeRom().then(draw);
+    /* ★ 파일 받기는 게임보이 목록에서만. 게임&워치는 저장소를 안 봅니다. */
+    else if (st.systemId !== "gb") { /* 아무 일도 안 함 */ }
+    else if (name === "start")  $("file").click();       /* 지름길 */
+    else if (name === "select") { ui.openLibrary(); draw(); }
+    return;
+  }
+  if (st.screen === "library"){
+    if (name === "A")           { openLib(ui.chooseLibrary()); draw(); }
+    else if (name === "B")      { ui.closeLibrary(); draw(); }
     return;
   }
   if (st.screen === "menu"){
@@ -454,7 +594,7 @@ function boot(){
     looksLikeGb: GameMode.looksLikeGb,
     fetchRom, loadWasm,
     canvas: $("screen"),
-    onExit: () => { location.href = "../"; },
+    onExit: () => { try { location.replace("../"); } catch (e) { location.href = "../"; } },
   });
 
   /* ★ 게임이 뜻하지 않게 사라지면(브라우저가 얼리거나 떠날 때) 화면도 따라 나옵니다.
@@ -464,6 +604,10 @@ function boot(){
       ui.quit().then(() => { ui.warn("GAME STOPPED"); draw(); });
     }
   });
+
+  /* ★ 아이폰 소리 대책 — 손가락이 처음 닿는 순간에 소리 장치를 깨웁니다.
+       게임 시작 시점은 이미 늦습니다 (기다린 뒤라 제스처가 끊깁니다). */
+  document.addEventListener("pointerdown", () => GameMode.wakeAudio(), { capture:true });
 
   pad = new GamePad4.Pad({ onPress });
   pad.attach($("padArea"), [
@@ -483,20 +627,125 @@ function boot(){
   hookFs("fsDn", -FS_STEP);
   initFS();
 
-  $("file").addEventListener("change", async e => {
-    const f = e.target.files[0];
-    e.target.value = "";
-    if (f) { await ui.addRom(f); draw(); }
-  });
+  /* ── 파일 / 폴더 받기 ────────────────────────────────────────────────
+     둘 다 같은 곳으로 갑니다. 폴더를 고르면 그 안의 것이 전부 옵니다
+     (하위 폴더까지). 거르는 일은 ui.addRoms 가 합니다.               */
+  async function takeFiles(input){
+    const files = Array.from(input.files || []);
+    /* ★ 값을 먼저 비웁니다. 같은 폴더를 두 번 골라도 반응하게. */
+    input.value = "";
+    if (!files.length) return;
+
+    if (files.length === 1){ await ui.addRom(files[0]); draw(); return; }
+
+    /* 여러 개일 때는 몇 개째인지 보여줍니다. 안 보이면 멈춘 줄 압니다. */
+    let last = 0;
+    await ui.addRoms(files, (now, total) => {
+      /* 너무 자주 그리면 오히려 느려집니다. 한 번에 한 개씩만. */
+      if (now === total || now - last >= 1){
+        last = now;
+        $("note").textContent = `READING ${now} / ${total}`;
+      }
+    });
+    draw();
+  }
+  $("file").addEventListener("change", e => takeFiles(e.target));
+  $("dir") .addEventListener("change", e => takeFiles(e.target));
+
+  /* ── ★ 목록에서 손가락으로 고르기 / 길게 눌러 지우기 ──────────────────
+     줄은 그릴 때마다 새로 만들어지므로, 듣는 쪽은 #page 에 한 번만 답니다.
+
+     짧게 누름 → 그 줄로 커서 이동. 이미 고른 줄이면 시작.
+     길게 누름 → 지울까 물어봄.
+
+     [ 반드시 챙겨야 하는 것 ]
+       · 손가락이 움직이면 취소 (스크롤하려던 것이지 지우려던 게 아님)
+       · pointercancel 도 취소 (전화가 오면 옴)
+       · 길게 눌러 확인창이 뜬 뒤에는 손을 떼도 아무 일 없어야 함    */
+  /* ★ 600ms 는 너무 짧습니다.
+       안드로이드가 "길게 누름" 으로 치는 기본값이 500ms, 아이폰도 0.5초입니다.
+       즉 600ms 는 **망설이는 탭**과 겨우 100ms 차이입니다.
+       줄 하나 고르려고 잠깐 멈칫한 것이 지우기 창을 띄웁니다. */
+  const HOLD_MS = 900;
+
+  let holdT = null, holdRow = null, holdI = -1, holdId = null,
+      holdX = 0, holdY = 0;
+
+  function cancelHold(){
+    if (holdT) { clearTimeout(holdT); holdT = null; }
+    if (holdRow) { holdRow.classList.remove("holding"); holdRow = null; }
+    holdI = -1; holdId = null;
+  }
+  /* ★ draw() 가 줄을 통째로 새로 그리면 막대는 사라지는데 시계는 살아남습니다.
+       그러면 아무 예고 없이 지우기 창이 튀어나옵니다. 같이 끄게 연결합니다. */
+  holdCancel = cancelHold;
+
+  $("page").addEventListener("pointerdown", e => {
+    /* ★ 이미 다른 손가락이 누르고 있으면 무시합니다.
+         전에는 두 번째 손가락이 첫 번째의 상태를 덮어써서,
+         빈 곳을 톡 쳤는데 게임이 켜지는 일이 있었습니다. */
+    if (holdId !== null) return;
+    const st = ui.state;
+    if (st.screen !== "list" || st.confirm) return;
+    const row = e.target && e.target.closest && e.target.closest(".row[data-i]");
+    if (!row) return;
+    holdRow = row; holdI = Number(row.dataset.i); holdId = e.pointerId;
+    holdX = e.clientX; holdY = e.clientY;
+    /* 막대가 차오르는 걸 보여줍니다 — 얼마나 더 눌러야 하는지 알게 */
+    row.classList.add("holding");
+    holdT = setTimeout(() => {
+      holdT = null;
+      const i = holdI;
+      cancelHold();
+      /* ★ 지울 수 있는 것일 때만 진동합니다.
+           기본 게임은 못 지우는데도 부르르 떨면, "떨렸으니 지워지는구나" 를
+           잘못 배웁니다. 그 학습이 나중에 확인창을 안 읽게 만듭니다. */
+      if (ui.askRemove(i)) {
+        armAt = Date.now();
+        try { if (navigator.vibrate) navigator.vibrate(15); } catch (err) {}
+      }
+      draw();
+    }, HOLD_MS);
+  }, { passive:true });
+
+  $("page").addEventListener("pointermove", e => {
+    if (holdId === null || e.pointerId !== holdId) return;
+    /* 10px 넘게 움직였으면 스크롤하려는 것입니다 */
+    if (Math.abs(e.clientX - holdX) > 10 || Math.abs(e.clientY - holdY) > 10) cancelHold();
+  }, { passive:true });
+
+  $("page").addEventListener("pointerup", e => {
+    if (holdId === null || e.pointerId !== holdId) return;
+    const i = holdI;
+    cancelHold();
+    if (i < 0) return;                       /* 이미 확인창이 떴으면 끝 */
+    const st = ui.state;
+    if (st.screen !== "list" || st.confirm) return;
+    /* 고른 줄을 또 누르면 시작. 처음 누른 줄이면 고르기만. */
+    if (i === st.cursor) { ui.play().then(draw); }
+    else if (ui.setCursor(i)) draw();
+  }, { passive:true });
+
+  /* ★ 전화·알림, 그리고 **스크롤이 시작될 때** 여기로 옵니다.
+       iOS 사파리는 스크롤을 넘기는 순간 pointermove 를 끊고
+       pointercancel 만 보냅니다. 위의 10px 판정은 거기서 안 돕니다. */
+  for (const t of ["pointercancel", "pointerleave"])
+    $("page").addEventListener(t, e => {
+      if (holdId !== null && e && e.pointerId !== undefined && e.pointerId !== holdId) return;
+      cancelHold();
+    }, { passive:true });
+  $("page").addEventListener("scroll", () => cancelHold(), { passive:true });
 
   /* ── 템패드로 돌아가기 ────────────────────────────────────────────────
      ★ 나가기 전에 반드시 에뮬레이터를 정리합니다.
        페이지를 떠나면 어차피 다 사라지지만, 저장이 날아가지 않게
        마지막 저장을 하고 나가야 합니다.                                */
+  /* ★ replace 를 씁니다. href 로 오가면 기록이 쌓여서
+       본체의 종료 버튼이 창을 못 닫게 됩니다. */
   function leave(){
     try { if (pad) pad.releaseAll(); } catch (e) {}
     try { GameMode.stop(); } catch (e) {}
-    location.href = "../";
+    try { location.replace("../"); } catch (e) { location.href = "../"; }
   }
   $("back").addEventListener("click", leave);
 
@@ -529,6 +778,18 @@ function boot(){
   if (typeof Binjgb !== "function"){
     ui.warn("EMULATOR FILES MISSING — SEE roms/ROMS.md");
   }
+  /* ★ 아이폰 사파리는 **7일 안 쓰면 저장한 것을 통째로 지웁니다.**
+       (WebKit 공식: 홈 화면에 추가한 앱은 예외)
+       그래서 사파리로 그냥 열었을 때만 한 번 알려줍니다. */
+  else try {
+    const nav = (typeof navigator !== "undefined") ? navigator : null;
+    const iOS = !!nav && /iPad|iPhone|iPod/.test(nav.userAgent || "");
+    const mm = (typeof matchMedia === "function") ? matchMedia : null;
+    const standalone = (nav && nav.standalone === true)
+      || (mm && mm("(display-mode: standalone)").matches)
+      || (mm && mm("(display-mode: fullscreen)").matches);
+    if (iOS && !standalone) ui.warn("ADD TO HOME SCREEN TO KEEP SAVES");
+  } catch (e) {}
   draw();
 }
 

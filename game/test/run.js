@@ -92,8 +92,11 @@ console.log("\n[5] ★ 비정상 종료 방어");
 { const {dom,G,mod,rom}=fresh();
   G.start(mod,rom,{});
   dom.fire("error");
-  ok("오류 나면 게임 정지", G.current()===null, "루프가 초당 60번 오류 뱉는 것 방지");
-  ok("오류 나도 메모리 반납", mod._alive.size===0);
+  /* ★ 없애지 않고 멈춥니다. 없애면 화면은 게임인데 되살릴 방법이 없어 갇힙니다. */
+  ok("오류 나면 게임 정지", !G.isRunning(), "루프가 초당 60번 오류 뱉는 것 방지");
+  ok("★ 오류 나도 되살릴 수 있음", G.current()!==null && !G.current().dead);
+  G.resume();
+  ok("★ RESUME 으로 살아남", G.isRunning());
 }
 { const {dom,G,mod,rom}=fresh();
   G.start(mod,rom,{});
@@ -151,6 +154,45 @@ console.log("\n[9] 버튼");
   G.stop();
   const n=F.log.length; G.press("down",true);
   ok("★ 끝난 뒤 누르면 무시", F.log.length===n, "죽은 에뮬을 건드리면 터짐");
+}
+
+console.log("\n[8-2] ★ 에뮬레이터가 거절한 세이브는 실패로");
+{ const {G,mod,rom}=fresh({badState:true});
+  G.start(mod,rom,{});
+  const st=G.saveState();
+  ok("★ 에뮬이 거절하면 false", G.loadState(st)===false,
+     "전에는 무조건 true 라 '불러왔다' 고 거짓말했습니다");
+  G.stop();
+}
+
+console.log("\n[9-2] ★ 다른 앱 갔다 오면 다시 돌아야 함");
+{ const {dom,G,mod,rom}=fresh();
+  G.start(mod,rom,{});
+  global.document.visibilityState="hidden"; dom.fire("visibilitychange");
+  ok("나가면 멈춤", !G.isRunning());
+  global.document.visibilityState="visible"; dom.fire("visibilitychange");
+  ok("★ 돌아오면 저절로 다시 돎", G.isRunning(), "전에는 멈춘 채로 갇혔습니다");
+  G.stop();
+}
+
+console.log("\n[9-3] ★ 롬 읽는 사이에 나가면 유령이 안 생겨야 함");
+{ const {G,mod,rom}=fresh();
+  const born = G.epoch();
+  G.stop();                       /* 그 사이에 나감 → 세대가 바뀜 */
+  const s = G.start(mod, rom, {}, born);
+  ok("★ 시작 안 됨", s===null, "전에는 뒤늦게 켜져서 배경에서 계속 돌았습니다");
+  ok("아무것도 안 돌고 있음", !G.isRunning());
+  ok("세대가 맞으면 정상 시작", G.start(mod,rom,{},G.epoch())!==null);
+  G.stop();
+}
+
+console.log("\n[9-4] ★ 시작을 두 번 해도 타이머가 하나");
+{ const {dom,G,mod,rom}=fresh();
+  const s=G.start(mod,rom,{});
+  s.start();
+  ok("타이머 하나뿐", dom.timers.size===1, "개수 "+dom.timers.size);
+  G.stop();
+  ok("정리하면 없음", dom.timers.size===0);
 }
 
 console.log("\n[10] 나쁜 롬");

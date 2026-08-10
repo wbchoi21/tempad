@@ -1,6 +1,6 @@
 const { execFileSync } = require("child_process");
 let bad = 0;
-for (const f of ["run.js", "ui.js", "pad.js", "page.js", "live.js"]) {
+for (const f of ["run.js", "store.js", "ui.js", "pad.js", "page.js", "live.js"]) {
   console.log("\n" + "=".repeat(50) + "\n  " + f + "\n" + "=".repeat(50));
   try {
     let out = execFileSync("node", [__dirname + "/" + f], {encoding:"utf8"});

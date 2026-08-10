@@ -36,9 +36,12 @@ function fresh(opt={}){
     async patch(id,ch){ const r=db.get(id); if(!r) return null; Object.assign(r,ch); return r; },
     async remove(id){ db.delete(id); },
   };
+  const LOGO=[0xCE,0xED,0x66,0x66,0xCC,0x0D,0x00,0x0B,0x03,0x73,0x00,0x83,0x00,0x0C,0x00,0x0D];
   const ui = new Ui({
     store, engine,
     readFile: async f => f.bytes,
+    looksLikeGb: b => { if(!b||b.length<0x150) return false;
+      for(let i=0;i<LOGO.length;i++) if(b[0x104+i]!==LOGO[i]) return false; return true; },
     fetchRom: async p => { if(opt.fetchFail) throw new Error("404");
                            return new Uint8Array(0x8000); },
     loadWasm: async () => { if(opt.noWasm) throw new Error("nope"); return {}; },
@@ -47,7 +50,13 @@ function fresh(opt={}){
   ui._reset();
   return { ui, db, engine, get started(){return started;}, get pressed(){return pressed;} };
 }
-const romFile=(name,size=0x8000)=>({ name, bytes:new Uint8Array(size) });
+/* 진짜 게임보이처럼 로고 바이트를 넣어줍니다 */
+const LOGO=[0xCE,0xED,0x66,0x66,0xCC,0x0D,0x00,0x0B,0x03,0x73,0x00,0x83,0x00,0x0C,0x00,0x0D];
+const romFile=(name,size=0x8000,valid=true)=>{
+  const b=new Uint8Array(size);
+  if(valid && size>=0x150) LOGO.forEach((v,i)=>b[0x104+i]=v);
+  return { name, bytes:b };
+};
 
 console.log("\n[1] 시스템 고르기 → 목록");
 { const t=fresh(); 
@@ -80,6 +89,9 @@ console.log("\n[2] 목록에서 움직이기");
   ok("넣은 것에 커서가 감", t2.ui.selected().title==="MYGAME", t2.ui.selected().title);
   const r=await t2.ui.addRom(romFile("tiny.gb", 100));
   ok("너무 작은 파일은 거부", r===null && /NOT A GAME BOY/.test(t2.ui.state.notice));
+  const r3=await t2.ui.addRom(romFile("notes.txt", 0x8000, false));
+  ok("★ 게임보이 롬이 아니면 거부 (로고 바이트 확인)", r3===null,
+     "전에는 크기만 봐서 .txt 도 게임으로 들어갔습니다");
   ok("거부해도 목록은 그대로", t2.ui.state.count===before+1);
 
   console.log("\n[4] 지우기");
@@ -181,7 +193,8 @@ console.log("\n[2] 목록에서 움직이기");
 
   console.log("\n[13] ★ 어디서든 나갈 길이 있는가");
   const t15=fresh();
-  ok("시스템 화면 → TEMPAD", t15.ui.upLabel()==="TEMPAD");
+  ok("시스템 화면에서는 더 위가 없음", t15.ui.upLabel()==="\u2014", t15.ui.upLabel());
+  ok("★ 눌러도 아무 일 없음 (밖으로 안 튕김)", (await t15.ui.up())==="stay" && t15.ui.state.screen==="system");
   await t15.ui.pickSystem("gb");
   ok("목록 → SYSTEM", t15.ui.upLabel()==="SYSTEM");
   ok("실제로 감", (await t15.ui.up())==="system" && t15.ui.state.screen==="system");
@@ -206,6 +219,34 @@ console.log("\n[2] 목록에서 움직이기");
   await t17.ui.chooseMenu();
   ok("★ 템패드로 나감 + 에뮬 정지", !t17.ui.state.running && t17.ui.state.screen==="system");
 
+  console.log("\n[14-2] ★★ MENU 가 페이지를 떠나지 않는가");
+  { /* 화면 넷 모두에서 MENU 를 눌러봅니다. 한 번이라도 나가면 실패입니다. */
+    for(const [name,setup] of [
+        ["시스템",  async u=>{}],
+        ["목록",    async u=>{ await u.pickSystem("gb"); }],
+        ["게임중",  async u=>{ await u.pickSystem("gb"); await u.play(); }],
+        ["메뉴",    async u=>{ await u.pickSystem("gb"); await u.play(); u.openMenu(); }]]){
+      const t=fresh(); let left=false;
+      t.ui.d.onExit = () => { left = true; };
+      await setup(t.ui);
+      await t.ui.up();
+      ok(name+" 에서 MENU 눌러도 안 나감", !left);
+    }
+  }
+
+  console.log("\n[14-3] ★ 남의 게임 세이브는 거부");
+  { const t=fresh(); await t.ui.pickSystem("gb"); await t.ui.play(); t.ui.openMenu();
+    t.ui.move(1);                                 /* SLOT 1 로 */
+    ok("슬롯에 저장됨", await t.ui.saveMenu()===true, t.ui.state.notice);
+    const rec=[...t.db.values()][0];
+    ok("기록이 생김", !!rec);
+    /* 다른 게임의 것처럼 롬 표시를 바꿔치기합니다 */
+    rec.states[1]={ rom:"다른게임", bytes:new Uint8Array([1,2,3]) };
+    t.ui.move(1);                                 /* SLOT 2 */
+    ok("★ 남의 세이브라고 거부", await t.ui.chooseMenu()===false);
+    ok("안내가 나옴", /ANOTHER GAME/.test(t.ui.state.notice), t.ui.state.notice);
+  }
+
   console.log("\n[15] ★ 갇히는 화면이 없는가");
   for(const [name,setup] of [
       ["시스템",  async u=>{}],
@@ -214,7 +255,7 @@ console.log("\n[2] 목록에서 움직이기");
       ["메뉴",    async u=>{ await u.pickSystem("gb"); await u.play(); u.openMenu(); }]]){
     const t=fresh(); await setup(t.ui);
     const lbl=t.ui.upLabel();
-    ok(name+" 화면에 나가는 길이 보임", typeof lbl==="string" && lbl.length>0, lbl);
+    ok(name+" 화면에 표시가 있음", typeof lbl==="string" && lbl.length>0, lbl);
   }
 
   console.log("\n[12] 시스템 화면 커서");

@@ -1463,7 +1463,7 @@ paintSound();
        2. 새 것이 준비되면 곧바로 한 번만 다시 켭니다
        3. 지금 어느 판인지 화면 아래에 찍습니다 (BUILD)
      3번이 있어야 "올린 게 반영됐나"를 눈으로 확인할 수 있습니다.        */
-const BUILD = "2026-08-10h";
+const BUILD = "2026-08-10n";
 /* 화면에 찍기 — 요소가 준비된 뒤에 */
 addEventListener("load", () => { const b=document.getElementById("bld"); if(b) b.textContent = "B"+BUILD.slice(5).replace(/-/g,""); });
 
@@ -1474,13 +1474,22 @@ if(location.protocol.startsWith("http") && "serviceWorker" in navigator){
            저장해두고 하루까지 새로 안 받아옵니다.
            그러면 고쳐 올려도 폰에서 며칠씩 옛것이 나옵니다.
            실제로 이것 때문에 한참 헤맸습니다.                        */
+      /* ★★ 처음 설치할 때는 절대 다시 켜면 안 됩니다. ★★
+
+         서비스워커는 install 에서 곧바로 자리를 넘겨받게(skipWaiting) 해뒀는데,
+         그러면 **처음 여는 순간에도** controllerchange 가 옵니다.
+         그때 다시 켜면 화면이 한 번 번쩍하고, 사정에 따라
+         켤 때마다 반복되어 **화면이 계속 깜빡입니다.**
+
+         "원래 일꾼이 있었는가" 를 먼저 봐야 합니다.
+         있었다면 진짜 갱신이고, 없었다면 첫 설치입니다.            */
+      const hadController = !!navigator.serviceWorker.controller;
       const reg = await navigator.serviceWorker.register("sw.js", { updateViaCache: "none" });
       reg.update();                              /* 켤 때마다 확인 */
-      /* 새 일꾼이 자리를 넘겨받으면 한 번만 다시 켭니다.
-         한 번만 — 이 표시가 없으면 무한히 새로고침합니다. */
       let reloaded = false;
       navigator.serviceWorker.addEventListener("controllerchange", () => {
-        if(reloaded) return;
+        if(!hadController) return;               /* ★ 첫 설치 — 그냥 둡니다 */
+        if(reloaded) return;                     /* ★ 다시 켜기는 한 번만 */
         reloaded = true;
         location.reload();
       });
@@ -1541,6 +1550,24 @@ function safeInsets(){
   }catch(e){ return { t:0, r:0, b:0, l:0 }; }
 }
 
+/* ★★ 화면 깜빡임 방지 ★★
+   폰에서 visualViewport 의 scroll 은 쉴 새 없이 옵니다 (주소창이 접히거나
+   손가락만 움직여도). 그때마다 화면 전체를 다시 재고 다시 그리면
+   **화면이 번쩍번쩍 깜빡입니다.**
+
+   두 가지로 막습니다.
+     1. 한 프레임에 한 번만 실행 (requestAnimationFrame)
+     2. 지난번과 크기가 같으면 아무것도 안 함
+   대부분의 scroll 은 크기가 그대로라 2번에서 걸러집니다.            */
+let fitPending = false;
+let lastFitKey = "";
+
+function scheduleFit(){
+  if(fitPending) return;
+  fitPending = true;
+  requestAnimationFrame(() => { fitPending = false; fitDevice(); });
+}
+
 function fitDevice(){
   /* 편집 중에는 키보드 때문에 화면이 확 줄어드는데, 그때 기기까지 줄이면
      뒤에서 화면이 요동칩니다. 편집이 끝난 뒤에 다시 맞춥니다.              */
@@ -1554,6 +1581,12 @@ function fitDevice(){
   const W = cand(vv && vv.width,  de && de.clientWidth,  window.innerWidth);
   const H = cand(vv && vv.height, de && de.clientHeight, window.innerHeight);
   if(!isFinite(W) || !isFinite(H) || !W || !H) return;
+
+  /* ★ 지난번과 똑같으면 아무것도 안 합니다. 이게 깜빡임을 없앱니다. */
+  const ins0 = safeInsets();
+  const key = `${W}x${H}|${ins0.t},${ins0.r},${ins0.b},${ins0.l}|${rightPad}|${fsNow}`;
+  if(key === lastFitKey) return;
+  lastFitKey = key;
 
   const dev    = $("device");
   const coarse = window.matchMedia ? matchMedia("(pointer:coarse)").matches : false;
@@ -1590,10 +1623,10 @@ $("rpPlus").addEventListener("click",   () => setRightPad(rightPad + 4));
 setMargin(edgeMargin);
 setRightPad(rightPad);
 
-addEventListener("resize", fitDevice);
+addEventListener("resize", scheduleFit);
 addEventListener("orientationchange", () => { fitDevice(); setTimeout(fitDevice, 350); });
 if(window.visualViewport){
-  visualViewport.addEventListener("resize", fitDevice);
+  visualViewport.addEventListener("resize", scheduleFit);
   visualViewport.addEventListener("scroll", fitDevice);
 }
 /* 주소창이 접히는 애니메이션이 끝난 뒤 한 번 더 재줍니다 */

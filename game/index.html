@@ -107,7 +107,9 @@ html,body{
       justify-content:space-between; font-size:9px; letter-spacing:1px;
       color:var(--dim); pointer-events:none; }
 /* 왼쪽 글자만 눌러서 템패드로 돌아갑니다 */
-#back{ pointer-events:auto; padding:2px 6px; margin:-2px -6px; }
+/* 나가는 길은 눈에 보여야 합니다. 테두리를 둘러 버튼처럼. */
+#back{ pointer-events:auto; padding:2px 7px; margin:-2px -1px;
+       border:1px solid var(--dim); border-radius:5px; color:var(--or); }
 #note{ position:absolute; left:8px; right:8px; bottom:15px; font-size:calc(var(--fs) * .7);
        letter-spacing:1px; color:var(--or); text-align:center; pointer-events:none; }
 
@@ -169,6 +171,15 @@ let edgeRight = 0;      /* 폰마다 오른쪽이 잘려서 따로 조절 */
 let wasmMod   = null;   /* binjgb. 처음 필요할 때 부릅니다 */
 let ui        = null;
 let pad       = null;
+/* ★★ 화면 깜빡임 방지 ★★
+   폰에서 visualViewport 의 scroll 은 쉴 새 없이 옵니다.
+   그때마다 화면 전체를 다시 재면 번쩍번쩍 깜빡입니다.
+     1. 한 프레임에 한 번만
+     2. 크기가 그대로면 아무것도 안 함
+     3. 노치 여백은 한 번만 재서 기억 (매번 DOM 을 만들었다 지우면 느립니다) */
+let fitPending  = false;
+let lastFitKey  = "";
+let insCache    = null;
 
 const GW = 160, GH = 144, MARGIN = 12, MIN_PANE = 150;
 const $ = id => document.getElementById(id);
@@ -177,6 +188,7 @@ const $ = id => document.getElementById(id);
    ★ vh/vw 를 믿지 마세요. 폰마다 주소창을 포함해서 알려줍니다.
      visualViewport 가 실제로 보이는 크기입니다.                        */
 function insets(){
+  if (insCache) return insCache;          /* ★ 한 번만 잽니다 */
   const p = document.createElement("div");
   p.style.cssText = "position:fixed;visibility:hidden;"
     + "top:env(safe-area-inset-top);left:env(safe-area-inset-left);"
@@ -184,7 +196,15 @@ function insets(){
   document.body.appendChild(p);
   const s = getComputedStyle(p), n = v => Math.max(0, parseFloat(v) || 0);
   const r = { t:n(s.top), l:n(s.left), b:n(s.bottom), r:n(s.right) };
-  p.remove(); return r;
+  p.remove();
+  insCache = r;
+  return r;
+}
+
+function scheduleFit(){
+  if (fitPending) return;
+  fitPending = true;
+  requestAnimationFrame(() => { fitPending = false; fit(); });
 }
 
 function fit(){
@@ -195,6 +215,11 @@ function fit(){
   if(!isFinite(W) || !isFinite(H) || !W || !H) return;
 
   const ins = insets();
+  /* ★ 지난번과 똑같으면 아무것도 안 합니다. 이게 깜빡임을 없앱니다. */
+  const key = `${W}x${H}|${ins.t},${ins.r},${ins.b},${ins.l}|${edgeRight}|${fsNow}`;
+  if (key === lastFitKey) return;
+  lastFitKey = key;
+
   const dw = W - ins.l - ins.r - MARGIN*2 - edgeRight;
   const dh = H - ins.t - ins.b - MARGIN*2;
   const dev = $("dev");
@@ -219,52 +244,66 @@ function fit(){
   $("paneL").style.left="0px";        $("paneL").style.width=gx+"px";
   $("paneR").style.left=(gx+gw)+"px"; $("paneR").style.width=(dw-gx-gw)+"px";
 
-  /* 왼쪽 판: 십자키 그림 + 글자 크기 버튼 (전부 고정 크기) */
-  const ps = Math.max(64, Math.min(gx-26, dh-150, 132));
-  const ph = $("padHint");
-  ph.style.width=ps+"px"; ph.style.height=ps+"px";
-  ph.style.left=Math.round((gx-ps)/2)+"px";
-  ph.style.top=Math.round((dh-ps)/2)+"px";
-  $("lblMove").style.left=Math.round((gx-32)/2)+"px";
-  $("lblMove").style.top=Math.round((dh+ps)/2+4)+"px";
-  /* 글자 크기 버튼은 왼쪽 판 맨 위에 나란히 */
-  const fw = 30, fh = 24, fgap = 8;
-  const fx = Math.round((gx - (fw*2+fgap))/2);
-  $("fsDn").style.cssText += `;left:${fx}px;top:10px;width:${fw}px;height:${fh}px;`;
-  $("fsUp").style.cssText += `;left:${fx+fw+fgap}px;top:10px;width:${fw}px;height:${fh}px;`;
+  /* ── 버튼 자리 ────────────────────────────────────────────────────
+     NES 패드처럼 **십자키와 A·B 를 같은 높이**에 둡니다.
+     SELECT·START 는 A·B 에서 넉넉히 띄웁니다 — 가까우면 게임 중에
+     엄지가 스치면서 눌립니다.
+     크기는 전부 고정입니다 (손가락 크기라 글자와 무관).             */
+  const rw   = dw - gx - gw;
+  const bs   = 46;          /* 동그란 버튼 지름 */
+  const gapB = 14;          /* B 와 A 사이 */
+  const pillW = 42, pillH = 16;
+  const GAP_PILL_BTN = 34;  /* ★ SELECT·START 와 A·B 사이. 넉넉히. */
 
-  /* ── 오른쪽 판: NES 패드 배치 ────────────────────────────────────
-     위에서부터  안내글 / MENU / SELECT·START 알약 / B·A 동그라미
-     버튼 크기는 전부 고정입니다 (손가락 크기라 글자와 무관).        */
-  const rw = dw-gx-gw;
-  $("info").style.left="12px";
-  $("info").style.top=(gy+2)+"px";
-  $("info").style.width=(rw-20)+"px";
+  /* ★ A·B 중심 높이 — 십자키도 여기에 맞춥니다.
+       버튼을 맨 아래에 붙이면 십자키가 들어갈 자리가 없어 쪼그라듭니다.
+       십자키가 제 크기로 들어갈 만큼만 올립니다.                     */
+  const PAD_TARGET = 110;
+  const ctrY = dh - Math.max(26 + bs/2, PAD_TARGET/2 + 26);   /* 하단 막대와 안 겹치게 */
 
-  const bs   = 46;                    /* 동그란 버튼 지름 */
-  const gap  = 14;
-  const pillW = 40, pillH = 16;
-  const baseY = dh - 26;              /* 맨 아랫줄 기준 */
+  const bx = Math.round((rw - (bs*2+gapB)) / 2);
+  const byTop = Math.round(ctrY - bs/2);
+  $("btnB").style.cssText += `;left:${bx}px;top:${byTop}px;width:${bs}px;height:${bs}px;`;
+  $("btnA").style.cssText += `;left:${bx+bs+gapB}px;top:${byTop}px;width:${bs}px;height:${bs}px;`;
 
-  /* B 왼쪽, A 오른쪽 (NES 와 같게) */
-  const bx = Math.round((rw - (bs*2+gap))/2);
-  $("btnB").style.cssText += `;left:${bx}px;top:${baseY-bs}px;width:${bs}px;height:${bs}px;`;
-  $("btnA").style.cssText += `;left:${bx+bs+gap}px;top:${baseY-bs}px;width:${bs}px;height:${bs}px;`;
-
-  /* SELECT · START 는 그 위에 알약 두 개 + 이름표 */
-  const px = Math.round((rw - (pillW*2+gap))/2);
-  const py = baseY - bs - 12 - pillH;
+  /* SELECT·START 알약 + 이름표 */
+  const px = Math.round((rw - (pillW*2+gapB)) / 2);
+  const py = byTop - GAP_PILL_BTN - pillH;
   $("btnSel").style.cssText += `;left:${px}px;top:${py}px;width:${pillW}px;height:${pillH}px;`;
-  $("btnSta").style.cssText += `;left:${px+pillW+gap}px;top:${py}px;width:${pillW}px;height:${pillH}px;`;
+  $("btnSta").style.cssText += `;left:${px+pillW+gapB}px;top:${py}px;width:${pillW}px;height:${pillH}px;`;
   $("lblSel").style.cssText += `;left:${px}px;top:${py-11}px;width:${pillW}px;`;
-  $("lblSta").style.cssText += `;left:${px+pillW+gap}px;top:${py-11}px;width:${pillW}px;`;
+  $("lblSta").style.cssText += `;left:${px+pillW+gapB}px;top:${py-11}px;width:${pillW}px;`;
 
-  /* 탈출구는 그 위에 넓게 */
-  const uw = pillW*2+gap;
-  const upY = py-11-30;
+  /* 탈출구는 그 위에 */
+  const uw  = pillW*2+gapB;
+  const upY = py - 11 - 10 - 26;
   $("btnUp").style.cssText += `;left:${px}px;top:${upY}px;width:${uw}px;height:26px;`;
-  /* ★ 안내글은 MENU 버튼 위까지만. 안 그러면 글자를 키웠을 때 버튼을 덮습니다. */
+
+  /* 안내글은 MENU 버튼 위까지만 (글자를 키워도 버튼을 안 덮게) */
+  $("info").style.left = "12px";
+  $("info").style.top  = (gy+2) + "px";
+  $("info").style.width  = (rw-20) + "px";
   $("info").style.height = Math.max(30, upY - (gy+2) - 8) + "px";
+
+  /* ── 왼쪽 판 ───────────────────────────────────────────────────────
+     ★ 십자키 중심을 A·B 와 같은 높이에 맞춥니다.
+       위아래로 삐져나가지 않게 크기를 줄여서 맞춥니다.              */
+  const fw = 30, fh = 24, fgap = 8, fTop = 10;
+  const roomUp   = ctrY - (fTop + fh + 14);      /* 글자크기 버튼 아래까지 */
+  const roomDown = dh - ctrY - 22;               /* 아래 여백 (하단 막대 자리) */
+  let ps = Math.min(PAD_TARGET, gx - 26, roomUp * 2, roomDown * 2);
+  ps = Math.max(56, Math.floor(ps));
+  const ph = $("padHint");
+  ph.style.width = ps + "px"; ph.style.height = ps + "px";
+  ph.style.left = Math.round((gx - ps) / 2) + "px";
+  ph.style.top  = Math.round(ctrY - ps/2) + "px";
+  /* ★ 글자는 십자키 위에. 아래에 두면 화면 맨 아래 막대와 겹칩니다. */
+  $("lblMove").style.left = Math.round((gx - 32) / 2) + "px";
+  $("lblMove").style.top  = Math.round(ctrY - ps/2 - 13) + "px";
+
+  const fx = Math.round((gx - (fw*2+fgap)) / 2);
+  $("fsDn").style.cssText += `;left:${fx}px;top:${fTop}px;width:${fw}px;height:${fh}px;`;
+  $("fsUp").style.cssText += `;left:${fx+fw+fgap}px;top:${fTop}px;width:${fw}px;height:${fh}px;`;
 
   $("diag").textContent = `${W}x${H} x${scale}`;
 }
@@ -276,7 +315,10 @@ function draw(){
   sc.style.visibility = playing ? "visible" : "hidden";
   pg.style.display = playing ? "none" : "block";
   $("note").textContent = st.notice || "";
-  $("btnUp").textContent = ui.upLabel();          /* ★ 어디로 가는지 글자로 */
+  /* ★ 어디로 가는지 글자로. 갈 곳이 없으면 흐리게 해서 눌러도 소용없음을 보입니다. */
+  const upTxt = ui.upLabel();
+  $("btnUp").textContent = upTxt;
+  $("btnUp").style.opacity = (upTxt === "\u2014") ? ".3" : "1";
 
   if (st.screen === "system"){
     pg.innerHTML = "<h2>SELECT SYSTEM</h2>" + GameUi.SYSTEMS.map((s,i) =>
@@ -285,9 +327,9 @@ function draw(){
     inf.innerHTML = `<div class="h">FIELD UNIT</div><hr>
       <div class="v">
         &#9650;&#9660; &nbsp;MOVE<br>
-        A &nbsp;&nbsp;&nbsp;&nbsp;SELECT<br>
-        MENU &nbsp;TEMPAD
-      </div>`;
+        A &nbsp;&nbsp;&nbsp;&nbsp;SELECT
+      </div><br>
+      <div class="v">TO LEAVE,<br>TAP &#8249; BOTTOM LEFT</div>`;
   }
   else if (st.screen === "list"){
     const list = ui.list();
@@ -344,8 +386,8 @@ function onPress(name, down){
   if (name === "down") { ui.move(1);  draw(); return; }
 
   if (st.screen === "system"){
+    /* B 로도 나가지 않습니다. 나가는 길은 왼쪽 아래 글자 하나뿐입니다. */
     if (name === "A") ui.pickSystem(GameUi.SYSTEMS[st.cursor].id).then(draw);
-    else if (name === "B") ui.exitToTempad();
     return;
   }
   if (st.screen === "list"){
@@ -389,6 +431,8 @@ function applyFS(v){
   try{ localStorage.setItem(FS_KEY, String(fsNow)); }catch(e){}
   $("fsDn").style.opacity = fsNow <= FS_MIN ? ".35" : "1";
   $("fsUp").style.opacity = fsNow >= FS_MAX ? ".35" : "1";
+  lastFitKey = "";                      /* 글자가 바뀌면 다시 재야 합니다 */
+  scheduleFit();
   if(ui) draw();                        /* 줄 높이가 바뀌니 다시 그립니다 */
 }
 
@@ -407,9 +451,18 @@ function boot(){
     store: GameMode.RomStore,
     engine: GameMode,
     readFile: GameMode.readFile,
+    looksLikeGb: GameMode.looksLikeGb,
     fetchRom, loadWasm,
     canvas: $("screen"),
     onExit: () => { location.href = "../"; },
+  });
+
+  /* ★ 게임이 뜻하지 않게 사라지면(브라우저가 얼리거나 떠날 때) 화면도 따라 나옵니다.
+       안 그러면 "PLAYING" 이라고 적힌 멈춘 화면에 갇힙니다. */
+  GameMode.setOnGone(() => {
+    if (ui.state.screen === "play" || ui.state.screen === "menu") {
+      ui.quit().then(() => { ui.warn("GAME STOPPED"); draw(); });
+    }
   });
 
   pad = new GamePad4.Pad({ onPress });
@@ -455,11 +508,9 @@ function boot(){
   });
   ["pointerup","pointercancel","pointerleave"].forEach(t =>
     $("btnUp").addEventListener(t, () => $("btnUp").classList.remove("on")));
-  $("btnUp").addEventListener("click", async () => {
-    const to = await ui.up();
-    if (to === "tempad") { leave(); return; }
-    draw();
-  });
+  /* ★ 이 버튼은 페이지를 떠나지 않습니다. 화면 안에서만 한 단계 위로.
+       나가는 길은 왼쪽 아래 글자와 일시정지 메뉴의 EXIT 뿐입니다. */
+  $("btnUp").addEventListener("click", async () => { await ui.up(); draw(); });
 
   /* 폰의 뒤로가기로 나갈 때도 정리되게 */
   addEventListener("pagehide", () => {
@@ -481,11 +532,15 @@ function boot(){
   draw();
 }
 
-addEventListener("resize", fit);
-addEventListener("orientationchange", () => setTimeout(fit, 300));
+addEventListener("resize", scheduleFit);
+addEventListener("orientationchange", () => {
+  insCache = null;                       /* 돌리면 노치 여백이 바뀝니다 */
+  lastFitKey = "";
+  setTimeout(scheduleFit, 300);
+});
 if (window.visualViewport){
-  visualViewport.addEventListener("resize", fit);
-  visualViewport.addEventListener("scroll", fit);
+  visualViewport.addEventListener("resize", scheduleFit);
+  visualViewport.addEventListener("scroll", scheduleFit);
 }
 boot(); fit(); setTimeout(fit, 200); setTimeout(fit, 700);
 
@@ -493,7 +548,7 @@ boot(); fit(); setTimeout(fit, 200); setTimeout(fit, 700);
    폰마다 화면 크기 보고가 제각각이라 코드로는 못 맞춥니다. */
 let holdT = null;
 $("btnSta").addEventListener("pointerdown", () => {
-  holdT = setTimeout(() => { edgeRight = (edgeRight + 8) % 48; fit(); }, 900);
+  holdT = setTimeout(() => { edgeRight = (edgeRight + 8) % 48; lastFitKey = ""; fit(); }, 900);
 });
 ["pointerup","pointercancel","pointerleave"].forEach(t =>
   $("btnSta").addEventListener(t, () => clearTimeout(holdT)));

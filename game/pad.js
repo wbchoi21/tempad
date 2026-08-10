@@ -36,6 +36,8 @@ function toDir(dx, dy, radius, prev) {
   const r = radius || RADIUS;
   const nx = dx / r, ny = dy / r;
   const len = Math.sqrt(nx * nx + ny * ny);
+  /* ★ 숫자가 아니면 방향 없음. 이걸 안 보면 NaN 이 "down" 으로 떨어집니다. */
+  if (!Number.isFinite(len)) return null;
   if (len < DEAD) return null;
   if (len < ON) return prev || null;      /* 살짝 민 것으로는 방향을 안 바꿈 */
 
@@ -108,11 +110,16 @@ Pad.prototype = {
     return true;
   },
 
+  /* ★ 같은 버튼을 두 손가락으로 누를 수 있습니다.
+       하나만 떼었다고 버튼을 놓아버리면, 아직 누르고 있는데 놓인 게 됩니다.
+       그 이름을 쥔 손가락이 하나도 안 남았을 때만 놓습니다. */
   btnUp(id) {
     const name = this.btnIds.get(id);
     if (name === undefined) return false;
     this.btnIds.delete(id);
-    this.onPress(name, false);
+    let stillHeld = false;
+    for (const n of this.btnIds.values()) if (n === name) { stillHeld = true; break; }
+    if (!stillHeld) this.onPress(name, false);
     return true;
   },
 
@@ -123,7 +130,14 @@ Pad.prototype = {
     this.stickId = null;
     this.origin = null;
     this.setDir(null);
-    for (const [id, name] of this.btnIds) this.onPress(name, false);
+    /* ★ 같은 버튼을 두 손가락으로 잡고 있었으면 뗌 신호가 두 번 나갑니다.
+         이름별로 한 번씩만 보냅니다 (btnUp 과 같은 규약). */
+    const seen = new Set();
+    for (const name of this.btnIds.values()) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      this.onPress(name, false);
+    }
     this.btnIds.clear();
   },
 

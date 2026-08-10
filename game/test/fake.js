@@ -70,7 +70,7 @@ function makeModule(opt={}){
     _emulator_write_ext_ram: () => rec("sram.write"),
     _emulator_read_ext_ram:  () => rec("sram.read"),
     _emulator_write_state:   () => rec("state.write"),
-    _emulator_read_state:    () => rec("state.read"),
+    _emulator_read_state:    () => { rec("state.read"); return opt.badState ? 1 : 0; },
     _alive: alive,
     _setSramDirty: v => { sramDirty = v; },
   };

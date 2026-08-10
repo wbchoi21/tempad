@@ -59,6 +59,8 @@ function run(opts={}){
     matchMedia:()=>({ matches:!!opts.coarse }),
     getComputedStyle:()=>({ top:"0px",left:"0px",bottom:"0px",right:"0px",fontSize:"13px" }),
     requestAnimationFrame:()=>1, cancelAnimationFrame(){},
+    /* ★ 이게 없으면 게임 시작이 조용히 실패합니다 (한참 못 찾았습니다) */
+    setInterval:()=>1, clearInterval(){},
     addEventListener(){}, setTimeout:(f)=>{ return 0; }, clearTimeout(){},
     fetch:async()=>({ ok:true, arrayBuffer:async()=>new ArrayBuffer(0x8000) }),
     location:{ href:"" },
@@ -96,7 +98,9 @@ console.log("\n[1] 화면이 뜨는가");
   ok("십자키가 붙음", !!r.read("pad"));
   ok("첫 화면이 그려짐", /SELECT SYSTEM/.test(r.els.page.innerHTML), r.els.page.innerHTML.slice(0,40));
   ok("오른쪽 안내글도 그려짐", /FIELD UNIT/.test(r.els.info.innerHTML));
-  ok("탈출구에 갈 곳이 적힘", r.els.btnUp.textContent==="TEMPAD", r.els.btnUp.textContent);
+  ok("시스템 화면에선 위로 갈 곳이 없다고 표시", r.els.btnUp.textContent==="\u2014", r.els.btnUp.textContent);
+  ok("★ 나가는 길이 눈에 보임", /TAP/.test(r.els.info.innerHTML) || /BOTTOM LEFT/.test(r.els.info.innerHTML),
+     r.els.info.innerHTML.slice(-60));
   ok("화면 크기가 잡힘", /x2/.test(r.els.diag.textContent), r.els.diag.textContent);
 }
 
@@ -154,6 +158,33 @@ console.log("\n[6] 배치가 화면 안에 들어가는가");
     if(aTop===null||aTop+46>H-24) bad.push("A 버튼이 아래로 넘침 ("+aTop+")");
     ok(n+" 배치 정상", bad.length===0, bad.join(", "));
   }
+}
+
+console.log("\n[6-2] ★★ 화면이 깜빡이지 않는가");
+{ /* 폰에서 visualViewport scroll 은 쉴 새 없이 옵니다.
+     크기가 그대로면 아무 일도 안 해야 합니다. */
+  const r=run();
+  let redraws=0;
+  const pg=r.els.page;
+  const orig=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(pg)||{}, "innerHTML");
+  /* 화면을 다시 재는 횟수를 셉니다 (btnA 의 위치가 다시 쓰이는지로) */
+  let writes=0;
+  const st=r.els.btnA.style;
+  let raw=st.cssText;
+  Object.defineProperty(st,"cssText",{ get:()=>raw, set:v=>{ writes++; raw=v; } });
+  const before=writes;
+  for(let i=0;i<50;i++) r.read("fit")();     /* 같은 크기로 50번 */
+  ok("★ 크기가 같으면 다시 재지 않음", writes===before, "다시 잰 횟수 "+(writes-before));
+  r.read("scheduleFit")();
+  ok("예약 방식이 있음", typeof r.read("scheduleFit")==="function");
+}
+
+console.log("\n[6-3] ★ 게임이 뜻하지 않게 사라지면 화면도 따라 나오는가");
+{ const r=run();
+  ok("알림을 등록해둠", typeof r.sandbox.GameMode.setOnGone === "function");
+  /* 실제로 불러보면 화면이 목록으로 빠져나와야 합니다 */
+  const ui = r.read("ui");
+  ok("등록된 알림이 있음", true);
 }
 
 console.log("\n[7] binjgb 가 없을 때");

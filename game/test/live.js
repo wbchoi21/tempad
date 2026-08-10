@@ -70,6 +70,24 @@ const G=require(path.join(D,"game.js"));
      Buffer.from(cv._data).toString("hex")===mark, "되돌린 화면이 다름");
   ok("남의 저장은 거부", G.loadState(new Uint8Array(10))===false);
 
+  console.log("\n[5-2] ★★ 세이브를 많이 해도 메모리가 안 새는가");
+  { /* 고치기 전에는 71번째에서 에뮬레이터가 통째로 죽었습니다.
+       아드님이 반나절이면 닿는 횟수입니다. */
+    const heap0 = mod.HEAP8.buffer.byteLength;
+    let died = null;
+    try {
+      for (let i = 0; i < 200; i++) {
+        const b = G.saveState();
+        if (!b || b.length < 1000) { died = i + "번째에서 저장 실패"; break; }
+        if (!G.loadState(b)) { died = i + "번째에서 불러오기 실패"; break; }
+      }
+    } catch (e) { died = "터짐: " + e.message; }
+    ok("★ 저장/불러오기 200번 왕복해도 멀쩡", died === null, died);
+    ok("HEAP 안 늘어남", mod.HEAP8.buffer.byteLength === heap0);
+    ok("그 뒤에도 저장이 됨", (() => { const b = G.saveState(); return !!b && b.length > 1000; })());
+    ok("그 뒤에도 화면이 그려짐", (() => { const before = cv.painted; t += 16.7; tick(t); return cv.painted > before; })());
+  }
+
   console.log("\n[6] 배터리 세이브");
   /* 2048 은 배터리 있는 카트리지라 게임이 저장하면 알림이 옵니다 */
   s.sramDirty = true;

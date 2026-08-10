@@ -105,6 +105,25 @@ console.log("\n[8] ★ 전부 떼기 (화면 나갈 때)");
   ok("두 번 해도 안 죽음", (p.releaseAll(), true));
 }
 
+console.log("\n[8-2] ★ 같은 버튼을 두 손가락으로");
+{ const {p,log}=mk();
+  p.btnDown(1,"A"); p.btnDown(2,"A");
+  ok("누름은 두 번 감", log.filter(x=>x==="A+").length===2, log.join(","));
+  p.btnUp(1);
+  ok("★ 하나 떼도 안 놓임", !log.includes("A-"), log.join(","));
+  ok("아직 눌린 상태", p.held.includes("A"));
+  p.btnUp(2);
+  ok("마지막을 떼면 놓임", log.filter(x=>x==="A-").length===1, log.join(","));
+}
+{ const {p,log}=mk();
+  p.btnDown(1,"A"); p.btnDown(2,"A"); p.btnDown(3,"B");
+  p.releaseAll();
+  ok("★ releaseAll 도 이름별로 한 번씩", log.filter(x=>x==="A-").length===1,
+     "A- 가 "+log.filter(x=>x==="A-").length+"번");
+  ok("B 도 한 번", log.filter(x=>x==="B-").length===1);
+  ok("전부 풀림", p.held.length===0);
+}
+
 console.log("\n[9] 화면에 붙였다 떼기");
 { const evs={}; const el={ addEventListener:(t,f)=>{(evs[t]=evs[t]||[]).push(f);},
                            removeEventListener:(t,f)=>{ evs[t]=(evs[t]||[]).filter(x=>x!==f); },

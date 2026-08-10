@@ -26,6 +26,11 @@
 let session   = null;    /* 지금 돌고 있는 게임. 없으면 null */
 let audioCtx  = null;    /* 소리. 처음 필요할 때 만듭니다 */
 let guardOn   = false;   /* 안전장치를 걸어뒀는지 */
+/* ★ 몇 번째 "세대" 인가. 정리할 때마다 하나씩 올라갑니다.
+     롬 파일을 읽는 동안(수십~수백ms) 사용자가 나가버리면,
+     읽기가 끝난 뒤에 게임이 켜져서 아무도 모르게 뒤에서 돕니다.
+     시작할 때 세대를 대조해서 그런 유령을 막습니다. */
+let epoch = 0;
 
 const SCREEN_W = 160, SCREEN_H = 144;
 const AUDIO_FRAMES = 4096;
@@ -98,11 +103,16 @@ function openDB() {
   });
 }
 
+/* ★ 결과는 **항상 같은 방식으로** 벗깁니다.
+     전에는 "값이 있으면 벗기고 없으면 요청 객체를 그대로" 였습니다.
+     그래서 없는 것을 찾으면 null 이 아니라 요청 객체가 나왔고,
+     받는 쪽의 "없으면" 검사가 전부 무력해졌습니다.
+     같은 롬을 다시 넣으면 저장이 통째로 지워지던 것도 이것 때문입니다. */
 function tx(db, mode, fn) {
   return new Promise((ok, no) => {
     const t = db.transaction(STORE, mode);
     const r = fn(t.objectStore(STORE));
-    t.oncomplete = () => ok(r && r.result !== undefined ? r.result : r);
+    t.oncomplete = () => ok(r ? r.result : undefined);
     t.onerror    = () => no(t.error);
     t.onabort    = () => no(t.error);
   });
@@ -139,16 +149,29 @@ function romTitle(bytes, fileName) {
 /* 같은 롬을 두 번 넣지 않도록 간단한 지문을 만듭니다.
    암호용이 아니라 구분용이라 이 정도면 충분합니다. */
 function romKey(bytes) {
+  /* ★ Math.imul 을 씁니다. 그냥 * 를 쓰면 큰 수에서 아래 비트가 뭉개집니다. */
   let h1 = 0x811c9dc5, h2 = 0x01000193;
   for (let i = 0; i < bytes.length; i++) {
-    h1 = (h1 ^ bytes[i]) * 16777619 >>> 0;
+    h1 = Math.imul(h1 ^ bytes[i], 16777619) >>> 0;
     if ((i & 63) === 0) h2 = (h2 + h1) >>> 0;
   }
   return bytes.length.toString(36) + "-" + h1.toString(36) + h2.toString(36);
 }
 
+/* 진짜 게임보이 롬인지 봅니다.
+   0x104~0x113 에 닌텐도 로고 바이트가 고정으로 들어 있습니다.
+   이걸 안 보면 아무 파일이나 게임으로 등록됩니다 (실제로 .txt 가 들어갔습니다). */
+const GB_LOGO = [0xCE,0xED,0x66,0x66,0xCC,0x0D,0x00,0x0B,0x03,0x73,0x00,0x83,0x00,0x0C,0x00,0x0D];
+function looksLikeGb(bytes) {
+  if (!bytes || bytes.length < 0x150) return false;
+  for (let i = 0; i < GB_LOGO.length; i++) if (bytes[0x104 + i] !== GB_LOGO[i]) return false;
+  return true;
+}
+
 const RomStore = {
   async add(bytes, fileName) {
+    /* ★ 아래 모든 함수는 실패해도 반드시 연결을 닫습니다 (finally).
+         전에는 성공했을 때만 닫아서, 저장이 실패할 때마다 연결이 쌓였습니다. */
     const id = romKey(bytes);
     const rec = {
       id, title: romTitle(bytes, fileName), file: fileName || "",
@@ -157,49 +180,68 @@ const RomStore = {
       added: Date.now(), played: 0,
     };
     const db = await openDB();
-    const old = await tx(db, "readonly", s => s.get(id));
-    /* 이미 있으면 저장한 것들을 지키고 롬만 갱신합니다 */
-    if (old && old.result) {
-      const cur = old.result;
-      rec.sram = cur.sram; rec.states = cur.states;
-      rec.added = cur.added; rec.played = cur.played;
+    try {
+    const cur = await tx(db, "readonly", s => s.get(id));
+    /* ★ 이미 있으면 저장해둔 것들을 반드시 지킵니다.
+         전에는 이 검사가 항상 거짓이라, 같은 롬을 다시 넣거나
+         게임이 배터리 세이브를 하는 순간 슬롯 저장이 통째로 날아갔습니다. */
+    if (cur && cur.id) {
+      rec.sram   = cur.sram;
+      rec.states = cur.states || rec.states;
+      rec.added  = cur.added;
+      rec.played = cur.played || 0;
+      /* ★ 파일 이름과 제목도 처음 것을 지킵니다.
+           안 그러면 같은 롬을 다른 이름으로 넣었을 때 목록에 두 번 뜨고,
+           기본 게임에 저장을 하는 순간 이름이 바뀌어 버립니다
+           ("TOBU TOBU GIRL" → "TOBU"). */
+      rec.file   = cur.file || rec.file;
+      rec.title  = cur.title || rec.title;
     }
     await tx(db, "readwrite", s => s.put(rec));
-    db.close();
     return rec;
+    } finally { db.close(); }
   },
   async list() {
     const db = await openDB();
-    const all = await tx(db, "readonly", s => s.getAll());
-    db.close();
-    const arr = (all && all.result) || all || [];
-    /* 목록에는 롬 내용을 빼고 줍니다 (몇 MB 를 들고 다닐 필요가 없습니다) */
-    return arr.map(r => ({ id:r.id, title:r.title, file:r.file, size:r.size,
-                           hasSram: !!r.sram,
-                           states: r.states.map(x => !!x),
-                           added:r.added, played:r.played }))
-              .sort((a,b) => b.played - a.played || b.added - a.added);
+    let all;
+    try { all = await tx(db, "readonly", s => s.getAll()); }
+    finally { db.close(); }
+    const arr = all || [];
+    /* 목록에는 롬 내용을 빼고 줍니다 (몇 MB 를 들고 다닐 필요가 없습니다).
+       ★ 기록 하나가 이상해도 목록 전체가 무너지면 안 됩니다.
+         전에는 낡은 기록 하나 때문에 아드님이 넣은 롬이 전부 사라졌습니다. */
+    const out = [];
+    for (const r of arr) {
+      try {
+        out.push({ id:r.id, title:r.title || "UNTITLED", file:r.file || "",
+                   size:r.size || 0, hasSram: !!r.sram,
+                   states: (r.states || [null,null,null]).map(x => !!x),
+                   added:r.added || 0, played:r.played || 0 });
+      } catch (e) { /* 못 읽는 기록은 건너뜁니다 */ }
+    }
+    return out.sort((a,b) => b.played - a.played || b.added - a.added);
   },
   async get(id) {
     const db = await openDB();
-    const r = await tx(db, "readonly", s => s.get(id));
-    db.close();
-    return (r && r.result) || r || null;
+    try {
+      const r = await tx(db, "readonly", s => s.get(id));
+      return r || null;
+    } finally { db.close(); }
   },
   async patch(id, changes) {
     const db = await openDB();
-    const got = await tx(db, "readonly", s => s.get(id));
-    const rec = (got && got.result) || got;
-    if (!rec) { db.close(); return null; }
-    Object.assign(rec, changes);
-    await tx(db, "readwrite", s => s.put(rec));
-    db.close();
-    return rec;
+    try {
+      const rec = await tx(db, "readonly", s => s.get(id));
+      if (!rec || !rec.id) return null;
+      Object.assign(rec, changes);
+      await tx(db, "readwrite", s => s.put(rec));
+      return rec;
+    } finally { db.close(); }
   },
   async remove(id) {
     const db = await openDB();
-    await tx(db, "readwrite", s => s.delete(id));
-    db.close();
+    try { await tx(db, "readwrite", s => s.delete(id)); }
+    finally { db.close(); }
   },
 };
 
@@ -371,6 +413,8 @@ class Session {
     if (ctx && ctx.resume) ctx.resume();
     this.lastRafSec = 0;
     this.schedule();
+    /* ★ 두 번 불러도 타이머가 하나만 남게. 전에는 앞의 것이 영원히 새어나갔습니다. */
+    if (this.sramTimer) clearInterval(this.sramTimer);
     this.sramTimer = setInterval(() => this.flushSram(), 1000);
   }
 
@@ -378,6 +422,9 @@ class Session {
     if (this.dead || this.raf === null) return;
     cancelAnimationFrame(this.raf);
     this.raf = null;
+    /* ★ 멈추면 자동저장 타이머도 끕니다.
+         안 그러면 다른 앱에 가 있는 동안에도 1초마다 깨어납니다. */
+    if (this.sramTimer) { clearInterval(this.sramTimer); this.sramTimer = 0; }
     const ctx = getAudioCtx();
     if (ctx && ctx.suspend) ctx.suspend();
     this.flushSram();
@@ -389,11 +436,22 @@ class Session {
     if (ctx && ctx.resume) ctx.resume();
     this.lastRafSec = 0;
     this.schedule();
+    if (!this.sramTimer) this.sramTimer = setInterval(() => this.flushSram(), 1000);
   }
 
   /* ── 저장 ─────────────────────────────────────────────────────────── */
   /* 배터리 세이브 — 게임 자체의 저장 기능 (포켓몬의 "리포트" 같은 것)
      읽어오는 것은 flushSram() 에 있습니다. */
+/* ★★ _file_data_delete 뒤에 _free(ptr) 를 반드시 불러야 합니다. ★★
+
+   _file_data_delete 는 **속에 든 자료만** 돌려주고 껍데기(16바이트)는 안 돌려줍니다.
+   그런데 껍데기가 자료보다 먼저 잡히기 때문에, 돌려준 199,616바이트 자리를
+   그 16바이트가 가로막아 못 쓰게 됩니다. **한 번 저장할 때마다 195KB 가 사라집니다.**
+
+   게다가 binjgb 는 메모리를 늘릴 수 없게 지어져 있어서(늘리려 하면 그냥 죽습니다),
+   16MB 를 다 쓰면 에뮬레이터가 영구히 멈춥니다.
+   실제로 **저장/불러오기 70번이면 죽습니다.** 아이가 반나절이면 닿는 횟수입니다.
+   그때부터는 LOAD FAILED 만 뜨고 원인도 알 수 없습니다.                    */
   loadSram(bytes) {
     const m = this.module;
     const ptr = m._ext_ram_file_data_new(this.e);
@@ -403,9 +461,13 @@ class Session {
       m._emulator_read_ext_ram(this.e, ptr);
     }
     m._file_data_delete(ptr);
+    m._free(ptr);            /* ★ 껍데기까지 반납 */
   }
 
   /* 세이브 스테이트 — 아무 때나 순간을 통째로 */
+  /* 스테이트 안에는 어느 게임 것인지가 안 들어 있습니다.
+     크기까지 같으면 남의 세이브가 그대로 들어가 화면이 깨집니다.
+     그래서 슬롯에 넣을 때 롬 신원을 따로 붙여둡니다 (ui.js 참고). */
   getState() {
     const m = this.module;
     const ptr = m._state_file_data_new(this.e);
@@ -413,6 +475,7 @@ class Session {
     m._emulator_write_state(this.e, ptr);
     const out = buf.slice();
     m._file_data_delete(ptr);
+    m._free(ptr);            /* ★ 껍데기까지 반납 */
     return out;
   }
   loadState(bytes) {
@@ -422,10 +485,13 @@ class Session {
     let ok = false;
     if (buf.byteLength === bytes.byteLength) {
       buf.set(bytes);
-      m._emulator_read_state(this.e, ptr);
-      ok = true;
+      /* ★ 반환값을 반드시 봐야 합니다. 0 이 성공, 1 이 실패입니다.
+           전에는 버려서, 에뮬레이터가 "머리말이 안 맞다" 고 거절해도
+           "불러왔다" 고 말하고 메뉴를 닫았습니다. 게임은 그대로인데요. */
+      ok = (m._emulator_read_state(this.e, ptr) === 0);
     }
     m._file_data_delete(ptr);
+    m._free(ptr);            /* ★ 껍데기까지 반납 */
     return ok;
   }
 
@@ -439,6 +505,7 @@ class Session {
       m._emulator_write_ext_ram(this.e, ptr);
       const bytes = buf.slice();
       m._file_data_delete(ptr);
+    m._free(ptr);            /* ★ 껍데기까지 반납 */
       if (this.opts.onSram) this.opts.onSram(bytes);
       return true;
     } catch (err) { return false; }
@@ -502,16 +569,25 @@ function pauseForBackground() {
   if (session && session.running) session.pause();     /* pause 안에서 저장까지 함 */
 }
 
+let onGone = null;           /* 세션이 사라졌다고 화면에 알려줄 곳 */
+
 function hardStop() {
+  epoch++;                     /* ★ 먼저 세대를 올립니다 */
   if (!session) return;
   const s = session;
   session = null;            /* ★ 먼저 끊습니다. 그래야 남은 프레임이 스스로 멈춥니다 */
   try { s.destroy(); } catch (e) {}
+  /* ★ 화면은 아직 "게임 중" 이라고 믿고 있습니다.
+       알려주지 않으면 멈춘 화면에 갇힙니다 (RESUME 도 안 먹습니다). */
+  try { if (onGone) onGone(); } catch (e) {}
 }
 
 function onVisibility() {
   if (typeof document === "undefined") return;
-  if (document.visibilityState === "hidden") pauseForBackground();
+  if (document.visibilityState === "hidden") { pauseForBackground(); return; }
+  /* ★ 돌아왔으면 다시 돌립니다.
+       전에는 멈춘 채로 있어서 "화면은 게임인데 아무 반응이 없는" 상태가 됐습니다. */
+  if (session && !session.dead && !session.running) session.resume();
 }
 
 function installGuards() {
@@ -528,10 +604,11 @@ function installGuards() {
   /* 브라우저가 페이지를 얼려버리기 직전 (Page Lifecycle) */
   window.addEventListener("freeze", hardStop);
 
-  /* 오류가 나면 게임만 멈춥니다. 이걸 안 하면 화면은 멈췄는데
-     루프는 계속 돌면서 오류를 초당 60번 뱉습니다. */
-  window.addEventListener("error", hardStop);
-  window.addEventListener("unhandledrejection", hardStop);
+  /* ★ 오류가 나면 **멈추기만** 합니다 (없애지 않습니다).
+       없애버리면 화면은 게임인데 되살릴 방법이 없어져서 갇힙니다.
+       멈추면 저장도 되고 RESUME 으로 살아납니다. */
+  window.addEventListener("error", pauseForBackground);
+  window.addEventListener("unhandledrejection", pauseForBackground);
 }
 
 
@@ -540,12 +617,17 @@ function installGuards() {
    ========================================================================== */
 
 const GameMode = {
-  RomStore, readFile, romTitle, romKey, tintOrange,
+  RomStore, readFile, romTitle, romKey, tintOrange, looksLikeGb,
 
   /* 게임 시작. ★ 무조건 앞의 게임을 먼저 정리합니다.
      이걸 안 하면 두 게임이 겹쳐 돌면서 소리가 두 겹으로 납니다. */
-  start(module, romBytes, opts) {
+  /* born 을 주면 "그 세대가 아직 유효할 때만" 시작합니다.
+     ui.play() 가 롬을 읽기 전에 epoch() 를 잡아 두고 넘깁니다. */
+  start(module, romBytes, opts, born) {
     installGuards();
+    /* ★ 읽는 사이에 나갔으면 아예 시작하지 않습니다 */
+    if (born !== undefined && born !== epoch) return null;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return null;
     hardStop();
     const s = new Session(module, romBytes, opts);
     session = s;
@@ -555,6 +637,9 @@ const GameMode = {
   },
 
   stop: hardStop,
+  epoch: () => epoch,
+  /* 세션이 사라지면 불러줄 곳을 등록합니다 (화면이 목록으로 빠져나오게) */
+  setOnGone(fn) { onGone = fn; },
   current: () => session,
   isRunning: () => !!(session && session.running),
 
@@ -570,5 +655,8 @@ const GameMode = {
   _guards: { onVisibility, hardStop, pauseForBackground },
 };
 
-if (typeof window !== "undefined") window.GameMode = GameMode;
+/* ★ 안전장치는 **파일을 불러올 때 바로** 겁니다.
+     전에는 게임을 처음 시작할 때 걸어서, 맨 처음 롬을 읽는 동안에는
+     freeze / pagehide 를 아무도 안 듣고 있었습니다. */
+if (typeof window !== "undefined") { installGuards(); window.GameMode = GameMode; }
 if (typeof module !== "undefined" && module.exports) module.exports = GameMode;

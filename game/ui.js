@@ -68,12 +68,21 @@ Ui.prototype = {
     let saved = [];
     try { saved = await this.d.store.list(); }
     catch (e) { notice = "STORAGE UNAVAILABLE — OPEN VIA WEB ADDRESS"; }
+    /* ★ 저장된 기록이 기본 게임과 같은 파일이면, **이름과 라이선스 표기는
+         기본 것을 씁니다.** 롬 헤더에서 읽은 이름은 짧고 투박합니다
+         ("TOBU TOBU GIRL" → "TOBU"). 저장을 한 번 했다고 목록의 이름이
+         바뀌면 아드님이 다른 게임인 줄 압니다. */
+    const byName = new Map(BUNDLED.map(b => [b.file, b]));
+    const shown = saved.map(r => {
+      const b = byName.get(r.file);
+      return b ? { ...r, title:b.title, note:b.note } : r;
+    });
     const byFile = new Set(saved.map(r => r.file));
     const bundled = BUNDLED
       .filter(b => !byFile.has(b.file))
       .map(b => ({ id:"bundled:" + b.file, title:b.title, file:b.file,
                    note:b.note, bundled:true, hasSram:false, states:[false,false,false] }));
-    romList = bundled.concat(saved);
+    romList = bundled.concat(shown);
     if (cursor >= romList.length) cursor = Math.max(0, romList.length - 1);
     return romList;
   },
@@ -170,22 +179,34 @@ Ui.prototype = {
     if (screen === "play")   return "MENU";
     if (screen === "menu")   return "RESUME";
     if (screen === "list")   return "SYSTEM";
-    return "TEMPAD";
+    return "—";            /* 기기 고르는 화면 — 더 위가 없습니다 */
   },
 
+  /* ★★ 이 버튼은 절대로 페이지를 떠나지 않습니다. ★★
+
+     전에는 기기 고르는 화면에서 누르면 템패드로 나가버렸습니다.
+     한 번 잘못 누르면 게임 밖으로 튕겨나가는 구조였습니다.
+     특히 화면이 바뀐 직후에는 버튼 글자가 아직 안 바뀌어 있을 수 있어서,
+     "MENU 인 줄 알고 눌렀는데 밖으로 나감" 이 됩니다.
+
+     그래서 나가는 길은 두 군데로만 두었습니다.
+       · 화면 왼쪽 아래 "< TVA // FIELD UNIT"
+       · 일시정지 메뉴의 EXIT
+     둘 다 "나간다"고 글자로 적혀 있습니다.                              */
   async up() {
     if (screen === "play") { this.openMenu(); return "menu"; }
     if (screen === "menu") { this.closeMenu(); return "play"; }
     if (screen === "list") { this.backToSystem(); return "system"; }
-    this.exitToTempad();
-    return "tempad";
+    return "stay";              /* 기기 고르는 화면에서는 아무 일도 안 함 */
   },
 
   /* ── 롬 넣기 ──────────────────────────────────────────────────────── */
   async addRom(file) {
     try {
       const bytes = await this.d.readFile(file);
-      if (bytes.length < 0x150) { notice = "NOT A GAME BOY FILE"; return null; }
+      /* ★ 크기만 보면 아무 파일이나 들어옵니다 (.txt 도 들어갔습니다).
+           닌텐도 로고 바이트로 진짜 게임보이 롬인지 확인합니다. */
+      if (!this.d.looksLikeGb(bytes)) { notice = "NOT A GAME BOY FILE"; return null; }
       const rec = await this.d.store.add(bytes, file.name);
       notice = "ADDED — " + rec.title;
       await this.refresh();
@@ -210,6 +231,9 @@ Ui.prototype = {
   async play() {
     const r = this.selected();
     if (!r) { notice = "NO GAME"; return false; }
+    /* ★ 롬을 읽는 동안 사용자가 나갈 수 있습니다.
+         지금 세대를 잡아뒀다가 시작할 때 대조합니다. */
+    const born = this.d.engine.epoch ? this.d.engine.epoch() : undefined;
 
     let bytes = null, sram = null, rec = r;
     try {
@@ -226,8 +250,9 @@ Ui.prototype = {
     try { mod = await this.d.loadWasm(); }
     catch (e) { notice = "EMULATOR NOT AVAILABLE"; return false; }
 
+    let started;
     try {
-      this.d.engine.start(mod, bytes, {
+      started = this.d.engine.start(mod, bytes, {
         canvas: this.d.canvas,
         sram: sram || undefined,
         /* 게임이 스스로 저장하면 여기로 옵니다. 저장소에 넣어둔 롬은
@@ -243,12 +268,14 @@ Ui.prototype = {
             }
           } catch (e) {}
         },
-      });
+      }, born);
     } catch (e) {
       notice = (e && e.message === "BAD ROM") ? "BAD ROM FILE" : "COULD NOT START";
       return false;
     }
 
+    /* 읽는 사이에 나갔으면 start 가 null 을 줍니다. 화면을 넘기지 않습니다. */
+    if (started === null) return false;
     playing = rec;
     screen = "play";
     notice = "";
@@ -279,9 +306,12 @@ Ui.prototype = {
 
   async saveSlot(n) {
     if (!playing) return false;
-    const bytes = this.d.engine.saveState();
-    if (!bytes) { notice = "NOTHING TO SAVE"; return false; }
     try {
+      /* ★ 이 줄이 try 밖에 있었습니다.
+           여기서 터지면 처리 안 된 오류가 되고, 그러면 game.js 의
+           안전장치가 그걸 잡아서 **게임까지 멈춰버립니다.** */
+      const bytes = this.d.engine.saveState();
+      if (!bytes) { notice = "NOTHING TO SAVE"; return false; }
       /* 저장소에 넣어둔 롬은 아직 보관 기록이 없으니 만들어 둡니다 */
       let id = playing.id;
       if (playing.bundled || String(id).startsWith("bundled:")) {
@@ -291,7 +321,10 @@ Ui.prototype = {
       }
       const full = await this.d.store.get(id);
       const states = (full && full.states) ? full.states.slice() : [null,null,null];
-      states[n] = bytes;
+      /* ★ 어느 롬의 세이브인지 함께 적어둡니다.
+           스테이트 안에는 게임 신원이 없어서, 크기만 같으면
+           남의 세이브가 그대로 들어가 화면이 깨집니다. */
+      states[n] = { rom: id, bytes };
       await this.d.store.patch(id, { states });
       notice = "SAVED TO SLOT " + (n + 1);
       return true;
@@ -302,8 +335,13 @@ Ui.prototype = {
     if (!playing) return false;
     try {
       const full = await this.d.store.get(playing.id);
-      const bytes = full && full.states && full.states[n];
-      if (!bytes) { notice = "SLOT " + (n + 1) + " EMPTY"; return false; }
+      const slot = full && full.states && full.states[n];
+      if (!slot) { notice = "SLOT " + (n + 1) + " EMPTY"; return false; }
+      /* 옛 방식(바이트만 있던 것)도 읽어줍니다 */
+      const bytes = slot.bytes || slot;
+      if (slot.rom && slot.rom !== playing.id) {
+        notice = "SLOT BELONGS TO ANOTHER GAME"; return false;
+      }
       const ok = this.d.engine.loadState(bytes);
       notice = ok ? "LOADED SLOT " + (n + 1) : "SLOT DOES NOT MATCH THIS GAME";
       if (ok) this.closeMenu();
@@ -317,8 +355,10 @@ Ui.prototype = {
   quit() {
     this.d.engine.stop();
     playing = null;
+    /* 메뉴를 거쳐 나왔을 때만 목록 자리를 되돌립니다.
+       안 거쳤으면 지금 커서가 맞는 자리입니다. */
+    if (screen === "menu") cursor = listCursor;
     screen = "list";
-    cursor = listCursor;
     notice = "";
     return this.refresh();
   },

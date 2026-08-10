@@ -11,7 +11,7 @@
    (아이콘 같은 건 잘 안 바뀌니 저장해둔 걸 먼저 씁니다.)
    ========================================================================== */
 
-const VERSION = "tempad-v6";
+const VERSION = "tempad-v9";
 const KEEP = [
   "./index.html",
   "./app.json",
@@ -70,7 +70,22 @@ self.addEventListener("fetch", e => {
      저장해두면 오래된 자료를 보여주게 되니까요.                              */
   if(!sameSite) return;
 
-  const isPage = req.mode === "navigate" || url.pathname.endsWith(".html");
+  /* ★★★ 여기가 "올렸는데 안 바뀐다" 의 진짜 원인이었습니다. ★★★
+
+     전에는 **.html 만** 인터넷 먼저였고, .js 는 아래쪽 "저장분 먼저" 로
+     떨어졌습니다. 그런데 게임 기능은 전부 .js 안에 들어 있습니다
+     (game.js / ui.js / pad.js). 즉 —
+
+       · index.html 은 새것을 받아옵니다 (그래서 BUILD 글자는 바뀝니다)
+       · 그런데 game/*.js 는 **폰에 저장해둔 옛날 것을 계속 씁니다**
+
+     파일을 아무리 제대로 올려도, 저장분 번호(VERSION)를 바꾸기 전까지는
+     게임 쪽이 통째로 옛날 그대로입니다. 올린 사람 잘못이 아닙니다.
+
+     이제 **글자로 된 파일은 전부 인터넷 먼저**로 바꿉니다.
+     그림과 wasm 만 저장분을 먼저 씁니다 — 그건 잘 안 바뀌고 무겁습니다. */
+  const heavy = /\.(png|jpg|jpeg|gif|svg|ico|wasm|woff2?)$/i.test(url.pathname);
+  const isPage = !heavy;
 
   if(isPage){
     /* 화면은 인터넷 먼저 → 고친 내용이 바로 반영됩니다.
@@ -79,8 +94,15 @@ self.addEventListener("fetch", e => {
          전에는 어떤 화면이든 ./index.html 이라는 한 칸에 덮어썼습니다.
          그러면 game/index.html 을 한 번 열자마자 본체 화면 자리에 게임이
          덮어써져서, 인터넷이 없을 때 본체를 열면 게임이 나옵니다.        */
+    /* ★ no-cache 를 붙입니다.
+         서비스워커를 지나도 그 뒤에 **브라우저 자체 저장분**이 또 있습니다.
+         이걸 안 붙이면 거기서 옛날 파일이 나와서, 새로고침을 해도
+         한동안 옛것이 보입니다. (지우는 게 아니라 "바뀌었나 물어보기" 라
+         안 바뀌었으면 안 받아오므로 느려지지 않습니다.) */
+    let fresh = req;
+    try { fresh = new Request(req, { cache: "no-cache" }); } catch (err) {}
     e.respondWith(
-      fetch(req)
+      fetch(fresh)
         .then(res => {
           /* ★ 성공한 것만 저장합니다.
                이걸 안 보면 404·500 화면을 정상인 줄 알고 저장해버립니다.

@@ -10,7 +10,7 @@
 "use strict";
 
 /* ── 새 상태값은 맨 위에 ─────────────────────────────────────────────── */
-let screen   = "system";   /* system | list | library | play | menu */
+let screen   = "system";   /* system | top | list | library | play | menu */
 let systemId = "gb";       /* gb (게임보이) | gw (게임&워치) */
 let romList  = [];         /* 목록에 보이는 것 */
 let cursor   = 0;          /* 목록에서 고른 자리 */
@@ -123,8 +123,46 @@ Ui.prototype = {
   /* ── 지금 화면의 목록 길이 ──────────────────────────────────────────
      화면마다 고를 것이 다릅니다. 이걸 안 나누면 메뉴에서 커서가
      엉뚱한 데까지 갑니다.                                             */
+  /* ── 맨 앞 화면의 메뉴 ────────────────────────────────────────────────
+     ★ 전에는 화면 왼쪽 아래 "< TVA // FIELD UNIT" 글자가 나가는 길이었습니다.
+       그런데 그게 **십자키 바로 옆**이라, 게임하다 엄지가 스치면
+       그대로 밖으로 튕겨나갔습니다. 그래서 없앴습니다.
+
+       대신 기기 고르는 화면에서 MENU 버튼을 누르면 여기가 뜹니다.
+       그 화면에서 MENU 는 원래 아무 일도 안 하는 죽은 버튼이었습니다.  */
+  topItems() {
+    return [
+      { key:"back",   label:"BACK", sub:"SELECT SYSTEM" },
+      { key:"tempad", label:"EXIT", sub:"BACK TO TEMPAD" },
+    ];
+  },
+
+  openTop() {
+    if (screen !== "system") return false;
+    screen = "top";
+    cursor = 0;          /* ★ 항상 BACK 부터. 잘못 눌러도 안 나가게 */
+    notice = "";
+    return true;
+  },
+
+  closeTop() {
+    if (screen !== "top") return false;
+    screen = "system";
+    cursor = 0;
+    return true;
+  },
+
+  chooseTop() {
+    const it = this.topItems()[cursor];
+    if (!it) return null;
+    if (it.key === "tempad") { this.exitToTempad(); return "tempad"; }
+    this.closeTop();
+    return "back";
+  },
+
   rows() {
     if (screen === "system")  return SYSTEMS.length;
+    if (screen === "top")     return this.topItems().length;
     if (screen === "menu")    return this.menuItems().length;
     if (screen === "library") return this.libraryItems().length;
     return romList.length;
@@ -279,7 +317,8 @@ Ui.prototype = {
     if (screen === "menu")    return "RESUME";
     if (screen === "library") return "LIST";
     if (screen === "list")    return "SYSTEM";
-    return "—";            /* 기기 고르는 화면 — 더 위가 없습니다 */
+    if (screen === "top")     return "BACK";
+    return "MENU";         /* 기기 고르는 화면 — 여기서 나가는 길이 열립니다 */
   },
 
   /* ★★ 이 버튼은 절대로 페이지를 떠나지 않습니다. ★★
@@ -306,7 +345,11 @@ Ui.prototype = {
     if (screen === "menu")    { this.closeMenu(); return "play"; }
     if (screen === "library") { this.closeLibrary(); return "list"; }
     if (screen === "list")    { this.backToSystem(); return "system"; }
-    return "stay";              /* 기기 고르는 화면에서는 아무 일도 안 함 */
+    if (screen === "top")     { this.closeTop(); return "system"; }
+    /* ★ 기기 고르는 화면. 여기서만 "나가기" 를 꺼냅니다.
+         (게임 중에는 절대 안 열립니다 — 위쪽 분기에서 이미 걸러집니다.) */
+    this.openTop();
+    return "top";
   },
 
   /* ── 롬 넣기 ──────────────────────────────────────────────────────── */

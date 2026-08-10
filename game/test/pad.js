@@ -8,12 +8,80 @@ const R=RADIUS;
 console.log("\n[1] 방향 판정");
 { ok("가만히 두면 없음", toDir(0,0,R)===null);
   ok("살짝 얹은 정도는 무시", toDir(4,0,R)===null, toDir(4,0,R));
-  ok("반쯤만 밀면 아직 안 침", toDir(R*0.4,0,R)===null);
+  ok("살짝 민 정도로는 아직 안 침", toDir(R*0.3,0,R)===null, toDir(R*0.3,0,R));
   ok("확실히 밀면 오른쪽", toDir(R,0,R)==="right");
   ok("왼쪽", toDir(-R,0,R)==="left");
   ok("위", toDir(0,-R,R)==="up");
   ok("아래", toDir(0,R,R)==="down");
-  ok("대각선도 4방향 중 하나만", ["up","right"].includes(toDir(R,-R,R)), toDir(R,-R,R));
+  ok("예전 방식(하나만)도 그대로 됨", ["up","right"].includes(toDir(R,-R,R)), toDir(R,-R,R));
+}
+
+console.log("\n[1-2] ★★ 대각선 — 진짜 십자키처럼 두 방향이 같이 눌려야 함");
+{ const { toDirs } = P;
+  const j = (x,y,prev) => toDirs(R*x, R*y, R, prev).sort().join("+");
+  ok("오른쪽만",        j(1,0)==="right", j(1,0));
+  ok("위만",            j(0,-1)==="up", j(0,-1));
+  ok("★ 오른쪽+위",     j(0.71,-0.71)==="right+up", j(0.71,-0.71));
+  ok("★ 왼쪽+아래",     j(-0.71,0.71)==="down+left", j(-0.71,0.71));
+  ok("★ 오른쪽+아래",   j(0.71,0.71)==="down+right", j(0.71,0.71));
+  ok("★ 왼쪽+위",       j(-0.71,-0.71)==="left+up", j(-0.71,-0.71));
+  ok("가만히 두면 없음", j(0,0)==="", j(0,0));
+
+  /* 8방향이 45도씩 고르게 나뉘는가 — 한 바퀴 돌면서 셉니다 */
+  const seen = {};
+  for(let a=0;a<360;a++){
+    const t=a*Math.PI/180;
+    seen[toDirs(R*Math.cos(t), R*Math.sin(t), R).sort().join("+")] = true;
+  }
+  ok("★ 여덟 방향이 전부 나옴", Object.keys(seen).length===8,
+     Object.keys(seen).sort().join(" / "));
+
+  /* 실제로 45도씩인지 (한 방향이 차지하는 각도) */
+  let rightOnly=0;
+  for(let a=0;a<3600;a++){
+    const t=a/10*Math.PI/180;
+    if(toDirs(R*Math.cos(t), R*Math.sin(t), R).join("+")==="right") rightOnly++;
+  }
+  ok("★ 한 방향이 45도쯤 차지", Math.abs(rightOnly/10 - 45) < 2, (rightOnly/10)+"도");
+
+  /* NaN 방어 */
+  ok("숫자가 아니면 없음", toDirs(NaN,0,R).length===0);
+  ok("무한대도 없음", toDirs(Infinity,0,R).length===0);
+}
+
+console.log("\n[1-3] ★ 대각선으로 꺾을 때 가던 방향이 안 끊겨야 함");
+{ /* 오른쪽 → 오른쪽위 로 꺾을 때 right 를 뗐다 다시 누르면
+     게임이 "키를 놨다"고 읽어서 캐릭터가 한 박자 멈춥니다. */
+  const {p,log}=mk();
+  p.down(1, 100, 100);
+  p.move(1, 100+R, 100);              /* 오른쪽 */
+  log.length=0;
+  p.move(1, 100+R*0.71, 100-R*0.71);  /* 오른쪽위 */
+  ok("★ right 를 놓지 않음", log.indexOf("right-")<0, log.join(","));
+  ok("up 만 새로 눌림", log.join(",")==="up+", log.join(","));
+  ok("둘 다 눌린 상태", p.held.join(",")==="right,up", p.held.join(","));
+  log.length=0;
+  p.move(1, 100+R, 100);              /* 다시 오른쪽 */
+  ok("★ up 만 떼짐", log.join(",")==="up-", log.join(","));
+  ok("right 는 계속 눌린 채", p.held.join(",")==="right", p.held.join(","));
+}
+
+console.log("\n[1-4] ★★ 십자키와 버튼을 동시에 (두 손가락)");
+{ const {p,log}=mk();
+  /* 왼손으로 오른쪽위, 오른손으로 A 와 B 를 같이 */
+  p.down(1, 100, 100);
+  p.move(1, 100+R*0.71, 100-R*0.71);
+  p.btnDown(2, "A");
+  p.btnDown(3, "B");
+  ok("★★ 대각선 + A + B 가 전부 눌림",
+     p.held.join(",")==="A,B,right,up", p.held.join(","));
+  p.btnUp(2);
+  ok("A 만 떼짐", p.held.join(",")==="B,right,up", p.held.join(","));
+  ok("★ 이동은 그대로", p.held.includes("right") && p.held.includes("up"));
+  p.up(1);
+  ok("이동만 떼짐", p.held.join(",")==="B", p.held.join(","));
+  p.btnUp(3);
+  ok("전부 풀림", p.held.length===0);
 }
 
 console.log("\n[2] ★ 대각선 떨림 방지");

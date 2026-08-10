@@ -174,9 +174,9 @@ console.log("\n[1] 화면이 뜨는가");
   ok("십자키가 붙음", !!r.read("pad"));
   ok("첫 화면이 그려짐", /SELECT SYSTEM/.test(r.els.page.innerHTML), r.els.page.innerHTML.slice(0,40));
   ok("오른쪽 안내글도 그려짐", /FIELD UNIT/.test(r.els.info.innerHTML));
-  ok("시스템 화면에선 위로 갈 곳이 없다고 표시", r.els.btnUp.textContent==="\u2014", r.els.btnUp.textContent);
-  ok("★ 나가는 길이 눈에 보임", /TAP/.test(r.els.info.innerHTML) || /BOTTOM LEFT/.test(r.els.info.innerHTML),
-     r.els.info.innerHTML.slice(-60));
+  ok("★ 기기 고르는 화면에서 MENU 가 살아있음", r.els.btnUp.textContent==="MENU", r.els.btnUp.textContent);
+  ok("★ 나가는 길이 눈에 보임", /PRESS MENU/.test(r.els.info.innerHTML),
+     r.els.info.innerHTML.replace(/<[^>]*>/g," ").slice(-70));
   ok("화면 크기가 잡힘", /x2/.test(r.els.diag.textContent), r.els.diag.textContent);
 }
 
@@ -210,7 +210,7 @@ console.log("\n[4] 글자 크기");
   ok("최대에서 멈춤", r.read("fsNow")===26, r.read("fsNow"));
   r.read("applyFS")(-999);
   ok("최소에서 멈춤", r.read("fsNow")===9, r.read("fsNow"));
-  ok("★ 버튼 크기는 안 변함", /width:46px/.test(r.els.btnA.style.cssText),
+  ok("★ 버튼 크기는 안 변함", /width:58px/.test(r.els.btnA.style.cssText),
      r.els.btnA.style.cssText.slice(-40));
   const r2=run({coarse:true});
   ok("손가락 기기는 기본이 큼", r2.read("fsNow")===16, r2.read("fsNow"));
@@ -218,10 +218,16 @@ console.log("\n[4] 글자 크기");
 
 console.log("\n[5] 버튼이 전부 연결됐는가");
 { const r=run();
-  for(const id of ["btnA","btnB","btnSel","btnSta","btnUp","fsUp","fsDn","padArea","back",
+  for(const id of ["btnA","btnB","btnSel","btnSta","btnUp","fsUp","fsDn","padArea",
                    "file","dir","page"])
     ok(id+" 에 손이 붙어 있음", Object.keys(r.els[id].listeners).length>0,
        Object.keys(r.els[id].listeners).join(","));
+  /* ★★ 화면 왼쪽 아래 글자는 **눌려선 안 됩니다.**
+         십자키 바로 옆이라, 게임 중에 엄지가 스치면 그대로 밖으로 튕겼습니다. */
+  ok("★★ 왼쪽 아래 글자는 안 눌림 (실수로 나가는 것 방지)",
+     Object.keys(r.els.back.listeners).length===0,
+     Object.keys(r.els.back.listeners).join(","));
+  ok("★ 글자에서 화살표도 뺌 (누르는 것처럼 안 보이게)", !/&lt;\s*TVA/.test(html) && /TVA \/\/ FIELD UNIT/.test(html));
 }
 
 console.log("\n[5-2] ★ 폴더 고르기");
@@ -502,6 +508,39 @@ console.log("\n[5-5b] ★★ LIBRARY 의 REMOVE 도 반드시 한 번 물어봅�
   ok("★ 물음표가 안 뜸", r.read("ui.state.confirm")===null);
   ok("왜 안 되는지 알려줌", /CANNOT DELETE/.test(r.els.note.textContent), r.els.note.textContent);
   ok("목록으로 돌아옴", r.read("ui.state.screen")==="list", r.read("ui.state.screen"));
+}
+
+console.log("\n[5-5c] ★★ 나가는 길 — MENU → EXIT 하나뿐");
+{ const r=run();
+  ok("(준비) 기기 고르는 화면", r.read("ui.state.screen")==="system");
+  ok("MENU 버튼이 살아있음", r.els.btnUp.textContent==="MENU", r.els.btnUp.textContent);
+
+  r.els.btnUp.fire("click"); await wait();
+  ok("★ 메뉴가 뜸", r.read("ui.state.screen")==="top", r.read("ui.state.screen"));
+  ok("★ EXIT 가 보임", /EXIT/.test(r.els.page.innerHTML), r.els.page.innerHTML.replace(/<[^>]*>/g," "));
+  ok("★ BACK 도 보임", /BACK/.test(r.els.page.innerHTML));
+  ok("★ 커서는 BACK 에 있음 (위험한 쪽이 아래)", r.read("ui.state.cursor")===0);
+  ok("아직 페이지를 안 떠남", r.read("location.href")==="", r.read("location.href"));
+
+  /* BACK 을 고르면 안 나갑니다 */
+  tap(r.els.btnA); await wait();
+  ok("★ BACK 이면 그냥 돌아옴", r.read("ui.state.screen")==="system", r.read("ui.state.screen"));
+  ok("페이지를 안 떠남", r.read("location.href")==="");
+
+  /* EXIT 를 골라야 나갑니다 */
+  r.els.btnUp.fire("click"); await wait();
+  r.sandbox.onPress("down", true); await wait();
+  ok("(준비) EXIT 로 내려옴", r.read("ui.state.cursor")===1);
+  tap(r.els.btnA); await wait();
+  ok("★★ EXIT 를 골라야 나감", r.read("location.href")==="../", r.read("location.href"));
+}
+{ /* ★★ 게임 중에는 이 메뉴가 절대 안 열려야 합니다.
+       열리면 게임 화면 위에 EXIT 가 떠서 사고가 납니다. */
+  const r=run();
+  r.read("ui.pickSystem('gb')"); await wait();
+  r.read("ui.play()"); await wait(12);
+  ok("(준비) 게임 중이거나 목록", r.read("ui.state.screen")!=="top", r.read("ui.state.screen"));
+  ok("★ 게임 화면에서 openTop 은 거부됨", r.read("ui.openTop()")===false);
 }
 
 console.log("\n[5-6] ★ 폴더째 넣기 (여러 개)");

@@ -21,11 +21,48 @@
 /* ── 판정값 ────────────────────────────────────────────────────────────
    전부 근거가 있는 숫자입니다. 자세한 것은 GAME_ENGINE.md 9장.        */
 const DEAD = 0.12;   /* 중심에서 12% 이내는 무시 — 엄지가 얹혀만 있어도 안 움직이게 */
-const ON   = 0.55;   /* 55% 이상 밀어야 방향으로 침 */
+const ON   = 0.38;   /* ★ 예전엔 0.55. 너무 멀리 밀어야 해서 조작이 무거웠습니다 */
 const KEEP = 1.4;    /* 축을 바꾸려면 다른 축이 1.4배 커야 함 (= 45도에 ±10도 여유) */
-const RADIUS = 56;   /* 이만큼 밀면 최대. 엄지가 편하게 닿는 거리 */
+const RADIUS = 48;   /* ★ 예전엔 56. 엄지가 짧게 움직여도 되게 줄였습니다 */
+
+/* ★★ 대각선 판정 ★★
+   진짜 게임보이 십자키는 **위와 오른쪽을 동시에** 누를 수 있습니다.
+   전에는 4방향 중 하나만 골라서, 대각선으로 못 가는 게임이
+   (젤다·마리오·커비 전부) 조작이 극악이 됐습니다.
+
+   0.414 는 22.5도의 탄젠트입니다. 두 축의 비가 이보다 크면 그 축도
+   눌린 것으로 봅니다. 그러면 8방향이 각각 45도씩 고르게 나뉩니다.
+     0~22.5도   → 오른쪽만
+     22.5~67.5  → 오른쪽+위 (대각선)
+     67.5~90    → 위만                                                  */
+const DIAG      = 0.414;
+/* 이미 대각선이면 조금 더 쉽게 유지합니다. 경계에서 덜덜 떠는 걸 막습니다. */
+const DIAG_KEEP = 0.30;
 
 const DIRS = ["up", "down", "left", "right"];
+
+/* 밀어낸 거리를 **방향 여러 개**로 바꿉니다. 대각선이면 두 개가 나옵니다.
+   prev 에 지금 눌린 방향 배열을 주면 경계에서 덜 흔들립니다. */
+function toDirs(dx, dy, radius, prev) {
+  const r = radius || RADIUS;
+  const nx = dx / r, ny = dy / r;
+  const len = Math.sqrt(nx * nx + ny * ny);
+  /* ★ 숫자가 아니면 방향 없음. 이걸 안 보면 NaN 이 "down" 으로 떨어집니다. */
+  if (!Number.isFinite(len)) return [];
+  if (len < DEAD) return [];
+  if (len < ON)   return prev ? prev.slice() : [];   /* 살짝 민 것으로는 안 바꿈 */
+
+  const ax = Math.abs(nx), ay = Math.abs(ny);
+  const had = d => !!(prev && prev.indexOf(d) >= 0);
+  const h = nx < 0 ? "left" : "right";
+  const v = ny < 0 ? "up"   : "down";
+  const out = [];
+  if (ax > ay * (had(h) ? DIAG_KEEP : DIAG)) out.push(h);
+  if (ay > ax * (had(v) ? DIAG_KEEP : DIAG)) out.push(v);
+  /* 정확히 45도면 위 두 검사가 다 빗나갑니다. 그때는 대각선입니다. */
+  if (!out.length) { out.push(h); out.push(v); }
+  return out;
+}
 
 /* 밀어낸 거리(dx,dy)를 4방향 하나로 바꿉니다.
    삼각함수 안 씁니다. 나눗셈 하나로 끝납니다.
@@ -61,20 +98,29 @@ function Pad(opts) {
 
   this.stickId = null;     /* 이동을 맡은 손가락 번호 */
   this.origin  = null;     /* 그 손가락이 처음 닿은 자리 */
-  this.dir     = null;     /* 지금 눌린 방향 */
+  this.dirs    = [];       /* 지금 눌린 방향들 (대각선이면 두 개) */
   this.btnIds  = new Map();/* 손가락 번호 → 버튼 이름 */
   this.bound   = [];
 }
 
 Pad.prototype = {
 
-  /* ── 방향 바꾸기. 옛 방향은 반드시 떼줍니다 ────────────────────────── */
-  setDir(d) {
-    if (d === this.dir) return;
-    if (this.dir) this.onPress(this.dir, false);
-    this.dir = d;
-    if (d) this.onPress(d, true);
+  /* 예전 이름. 방향 하나만 물어보는 곳을 위해 남겨둡니다. */
+  get dir() { return this.dirs.length ? this.dirs[0] : null; },
+
+  /* ── 방향 바꾸기 ──────────────────────────────────────────────────────
+     ★ 없어진 것은 반드시 떼고, 새로 생긴 것만 누릅니다.
+       그대로 있는 방향을 한 번 뗐다 다시 누르면 게임이 "키를 놨다"고
+       읽어서, 대각선으로 꺾는 순간 캐릭터가 한 박자 멈춥니다.        */
+  setDirs(next) {
+    const now = next || [];
+    for (const d of this.dirs) if (now.indexOf(d) < 0) this.onPress(d, false);
+    for (const d of now) if (this.dirs.indexOf(d) < 0) this.onPress(d, true);
+    this.dirs = now.slice();
   },
+
+  /* 예전 이름 (방향 하나) */
+  setDir(d) { this.setDirs(d ? [d] : []); },
 
   /* ── 손가락이 닿았을 때 ───────────────────────────────────────────── */
   down(id, x, y, el) {
@@ -88,7 +134,7 @@ Pad.prototype = {
 
   move(id, x, y) {
     if (id !== this.stickId || !this.origin) return false;
-    this.setDir(toDir(x - this.origin.x, y - this.origin.y, this.radius, this.dir));
+    this.setDirs(toDirs(x - this.origin.x, y - this.origin.y, this.radius, this.dirs));
     return true;
   },
 
@@ -97,7 +143,7 @@ Pad.prototype = {
     if (id !== this.stickId) return false;
     this.stickId = null;
     this.origin = null;
-    this.setDir(null);
+    this.setDirs([]);
     return true;
   },
 
@@ -129,7 +175,7 @@ Pad.prototype = {
   releaseAll() {
     this.stickId = null;
     this.origin = null;
-    this.setDir(null);
+    this.setDirs([]);
     /* ★ 같은 버튼을 두 손가락으로 잡고 있었으면 뗌 신호가 두 번 나갑니다.
          이름별로 한 번씩만 보냅니다 (btnUp 과 같은 규약). */
     const seen = new Set();
@@ -143,8 +189,7 @@ Pad.prototype = {
 
   /* 지금 눌려 있는 것들 (검사용) */
   get held() {
-    const out = [];
-    if (this.dir) out.push(this.dir);
+    const out = this.dirs.slice();
     for (const n of this.btnIds.values()) out.push(n);
     return out.sort();
   },
@@ -196,6 +241,6 @@ Pad.prototype = {
   },
 };
 
-const PadApi = { Pad, toDir, DEAD, ON, KEEP, RADIUS, DIRS };
+const PadApi = { Pad, toDir, toDirs, DEAD, ON, KEEP, DIAG, RADIUS, DIRS };
 if (typeof window !== "undefined") window.GamePad4 = PadApi;
 if (typeof module !== "undefined" && module.exports) module.exports = PadApi;

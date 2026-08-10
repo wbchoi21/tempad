@@ -193,8 +193,24 @@ console.log("\n[2] 목록에서 움직이기");
 
   console.log("\n[13] ★ 어디서든 나갈 길이 있는가");
   const t15=fresh();
-  ok("시스템 화면에서는 더 위가 없음", t15.ui.upLabel()==="\u2014", t15.ui.upLabel());
-  ok("★ 눌러도 아무 일 없음 (밖으로 안 튕김)", (await t15.ui.up())==="stay" && t15.ui.state.screen==="system");
+  /* ★★ 예전에는 화면 왼쪽 아래 "< TVA // FIELD UNIT" 이 나가는 길이었습니다.
+         십자키 바로 옆이라 게임 중에 엄지가 스치면 밖으로 튕겼습니다.
+         이제 나가는 길은 **기기 고르는 화면의 MENU → EXIT** 하나뿐입니다. */
+  ok("★ 기기 고르는 화면에서 MENU 가 살아있음", t15.ui.upLabel()==="MENU", t15.ui.upLabel());
+  ok("★ 눌러도 페이지를 안 떠남 — 메뉴만 뜸",
+     (await t15.ui.up())==="top" && t15.ui.state.screen==="top", t15.ui.state.screen);
+  ok("★ 커서는 BACK 에서 시작 (잘못 눌러도 안 나감)", t15.ui.state.cursor===0);
+  ok("메뉴 안에서 MENU 는 BACK", t15.ui.upLabel()==="BACK", t15.ui.upLabel());
+  ok("★ 되돌아올 수 있음", (await t15.ui.up())==="system" && t15.ui.state.screen==="system");
+  /* EXIT 를 골라야만 나갑니다 */
+  { let left=false;
+    const t=fresh(); t.ui.d.onExit = () => { left = true; };
+    await t.ui.up();                        /* 메뉴 열기 */
+    ok("★ BACK 을 고르면 안 나감", t.ui.chooseTop()==="back" && !left);
+    await t.ui.up(); t.ui.move(1);          /* 다시 열고 EXIT 로 */
+    ok("(준비) EXIT 에 있음", t.ui.topItems()[t.ui.state.cursor].key==="tempad");
+    ok("★★ EXIT 를 골라야 나감", t.ui.chooseTop()==="tempad" && left);
+  }
   await t15.ui.pickSystem("gb");
   ok("목록 → SYSTEM", t15.ui.upLabel()==="SYSTEM");
   ok("실제로 감", (await t15.ui.up())==="system" && t15.ui.state.screen==="system");

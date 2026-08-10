@@ -111,37 +111,74 @@ Ui.prototype = {
   backToSystem() { screen = "system"; cursor = 0; notice = ""; },
   warn(msg) { notice = msg; },
 
-  /* ── 메뉴에 뭐가 들어가는가 ──────────────────────────────────────── */
+  /* ── 메뉴에 뭐가 들어가는가 ────────────────────────────────────────
+     게임 중에는 8개 버튼이 전부 게임 차지라, 나가는 길이 여기에 다 있어야
+     합니다. 하나라도 빠지면 아드님이 갇힙니다.                          */
+  /* ★ 줄 수를 7개로 맞췄습니다.
+       화면이 160x144 라 한 화면에 일곱 줄이 한계입니다.
+       저장 칸을 SAVE 3줄 + LOAD 3줄로 나누면 열 줄이 되어
+       네 줄만 보이고 나머지는 스크롤해야 합니다.
+       작은 화면에서 스크롤은 "없는 것"과 같습니다.
+
+       그래서 칸 하나에 두 가지를 겁니다 — A 로 불러오고, START 로 저장합니다.
+       오른쪽 판에 그렇게 적어둡니다.                                     */
   menuItems() {
     const st = playing && playing.states ? playing.states : [null, null, null];
-    const mark = i => (st[i] ? "USED" : "EMPTY");
+    const mark = i => (st[i] ? "SAVED" : "EMPTY");
     return [
-      { key:"resume", label:"RESUME",       sub:"BACK TO GAME" },
-      { key:"save0",  label:"SAVE  SLOT 1", sub:mark(0) },
-      { key:"save1",  label:"SAVE  SLOT 2", sub:mark(1) },
-      { key:"save2",  label:"SAVE  SLOT 3", sub:mark(2) },
-      { key:"load0",  label:"LOAD  SLOT 1", sub:mark(0) },
-      { key:"load1",  label:"LOAD  SLOT 2", sub:mark(1) },
-      { key:"load2",  label:"LOAD  SLOT 3", sub:mark(2) },
-      { key:"quit",   label:"QUIT",         sub:"SAVES AUTOMATICALLY" },
+      { key:"resume", label:"RESUME",        sub:"BACK TO GAME" },
+      { key:"slot0",  label:"SLOT 1",        sub:mark(0) },
+      { key:"slot1",  label:"SLOT 2",        sub:mark(1) },
+      { key:"slot2",  label:"SLOT 3",        sub:mark(2) },
+      { key:"game",   label:"CHANGE GAME",   sub:"GAME LIST" },
+      { key:"system", label:"CHANGE SYSTEM", sub:"GAME BOY / G&W" },
+      { key:"tempad", label:"EXIT",          sub:"BACK TO TEMPAD" },
     ];
   },
 
+  /* A 를 눌렀을 때 */
   async chooseMenu() {
     const item = this.menuItems()[cursor];
     if (!item) return false;
     if (item.key === "resume") return this.closeMenu();
-    if (item.key === "quit")   { await this.quit(); return true; }
+    /* 아래 셋은 전부 게임을 먼저 정리하고 나갑니다 */
+    if (item.key === "game")   { await this.quit(); return true; }
+    if (item.key === "system") { await this.quit(); this.backToSystem(); return true; }
+    if (item.key === "tempad") { this.exitToTempad(); return true; }
+    if (item.key.startsWith("slot")) return this.loadSlot(Number(item.key.slice(-1)));
+    return false;
+  },
+
+  /* START 를 눌렀을 때 — 저장 칸에서만 뜻이 있습니다 */
+  async saveMenu() {
+    const item = this.menuItems()[cursor];
+    if (!item || !item.key.startsWith("slot")) { notice = "SELECT A SLOT FIRST"; return false; }
     const n = Number(item.key.slice(-1));
-    if (item.key.startsWith("save")) {
-      const ok = await this.saveSlot(n);
-      /* 저장한 뒤 목록 표시를 갱신합니다 */
-      if (ok && playing && playing.id) {
-        try { playing = await this.d.store.get(playing.id) || playing; } catch (e) {}
-      }
-      return ok;
+    const ok = await this.saveSlot(n);
+    /* 저장한 뒤 EMPTY → SAVED 로 바뀌게 다시 읽어옵니다 */
+    if (ok && playing && playing.id) {
+      try { playing = await this.d.store.get(playing.id) || playing; } catch (e) {}
     }
-    return this.loadSlot(n);
+    return ok;
+  },
+
+  /* ── ★ "한 단계 위로" 버튼 ──────────────────────────────────────────
+     화면마다 어디로 가는지가 다릅니다. 글자로 보여줘야 안 헤맵니다.
+     게임 중에는 게임보이 버튼 8개가 전부 게임 차지라,
+     이 버튼만이 유일한 탈출구입니다.                                    */
+  upLabel() {
+    if (screen === "play")   return "MENU";
+    if (screen === "menu")   return "RESUME";
+    if (screen === "list")   return "SYSTEM";
+    return "TEMPAD";
+  },
+
+  async up() {
+    if (screen === "play") { this.openMenu(); return "menu"; }
+    if (screen === "menu") { this.closeMenu(); return "play"; }
+    if (screen === "list") { this.backToSystem(); return "system"; }
+    this.exitToTempad();
+    return "tempad";
   },
 
   /* ── 롬 넣기 ──────────────────────────────────────────────────────── */

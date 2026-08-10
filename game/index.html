@@ -19,7 +19,14 @@
      로직은 전부 브라우저 없이 검사됩니다 →  node test/all.js
      ========================================================================= -->
 <style>
-:root{ --or:#F8861E; --dim:#78420F; --mid:#A85C18; --bg:#040506; }
+:root{
+  --or:#F8861E; --dim:#78420F; --mid:#A85C18; --bg:#040506;
+  /* ★ 읽는 글자만 이 값을 따릅니다.
+       버튼과 십자키는 손가락 크기라 고정입니다 — 글자를 키운다고
+       버튼이 같이 커지면 화면 밖으로 나갑니다.
+       템패드 본체와 같은 이름표(tempad.fs)를 써서 설정이 이어집니다. */
+  --fs: 13px;
+}
 *{ box-sizing:border-box; margin:0; padding:0; }
 html,body{
   width:100%; height:100%; background:var(--bg); overflow:hidden;
@@ -35,15 +42,24 @@ html,body{
 #screen{ display:block; image-rendering:pixelated; image-rendering:crisp-edges;
          background:var(--bg); }
 /* 게임이 안 돌 때 이 위에 목록·메뉴를 그립니다 */
-#page{ position:absolute; overflow:hidden; padding:6px 8px; }
-#page h2{ font-size:11px; letter-spacing:2px; color:var(--or);
+/* 목록이 화면보다 길어질 수 있어 스크롤을 켭니다.
+   막대는 숨깁니다 — 기기처럼 보여야 하니까요. */
+#page{ position:absolute; overflow-y:auto; overflow-x:hidden; padding:6px 8px;
+       scrollbar-width:none; }
+#page::-webkit-scrollbar{ display:none; }
+#page h2{ font-size:calc(var(--fs) * .85); letter-spacing:2px; color:var(--or);
           border-bottom:1px solid var(--dim); padding-bottom:3px; margin-bottom:5px; }
-.row{ font-size:11px; line-height:1.5; letter-spacing:.5px; color:var(--mid);
+.row{ font-size:calc(var(--fs) * .85); line-height:1.4; letter-spacing:.5px; color:var(--mid);
       white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:1px 3px; }
 .row.sel{ background:var(--or); color:var(--bg); }
-.row .sub{ font-size:9px; color:var(--dim); }
+.row .sub{ font-size:calc(var(--fs) * .68); color:var(--dim); }
+/* 메뉴는 일곱 줄이 한 화면에 들어가야 해서 바짝 붙입니다.
+   글자를 아주 크게 하면 넘치는데, 그때는 고른 줄이 따라 스크롤됩니다. */
+.row.one{ display:flex; align-items:baseline; gap:6px;
+          font-size:calc(var(--fs) * .8); line-height:1.15; padding:1px 3px; }
+.row.one .sub{ margin-left:auto; font-size:calc(var(--fs) * .62); }
 .row.sel .sub{ color:var(--bg); opacity:.8; }
-#page .empty{ font-size:10px; color:var(--dim); line-height:1.7; margin-top:6px; }
+#page .empty{ font-size:calc(var(--fs) * .78); color:var(--dim); line-height:1.7; margin-top:6px; }
 
 /* ── 좌우 판 ───────────────────────────────────────────────────────── */
 .pane{ position:absolute; top:0; bottom:0; }
@@ -54,26 +70,45 @@ html,body{
 .lbl{ position:absolute; font-size:9px; letter-spacing:1.5px; color:var(--dim);
       pointer-events:none; }
 
-#info{ position:absolute; font-size:10px; line-height:1.55; letter-spacing:.6px; }
-#info .h{ color:var(--or); font-size:10px; letter-spacing:2px; }
+/* ★ 높이를 버튼 바로 위까지로 잘라둡니다.
+     글자를 아주 크게 하면 안내글이 길어져 MENU 버튼을 덮습니다.
+     실제 크기는 fit() 이 정합니다. */
+#info{ position:absolute; overflow:hidden; font-size:calc(var(--fs) * .78); line-height:1.55; letter-spacing:.6px; }
+#info .h{ color:var(--or); font-size:calc(var(--fs) * .78); letter-spacing:2px; }
 #info .v{ color:var(--dim); }
 #info hr{ border:0; border-top:1px solid var(--dim); margin:2px 0 5px; }
 
+/* ── 버튼은 전부 고정 크기 (손가락 크기라 글자와 무관) ──────────────
+   NES 패드 배치를 따릅니다:
+     십자키 왼쪽 · SELECT/START 작은 알약 두 개 · B A 동그라미 (B 가 왼쪽) */
 .btn{ position:absolute; border:3px solid var(--dim); border-radius:50%;
       display:flex; align-items:center; justify-content:center;
-      font-size:12px; color:var(--dim); }
-.btn.on{ border-color:var(--or); color:var(--or); }
-.cap{ position:absolute; border:2px solid var(--dim); border-radius:8px;
+      font-size:13px; color:var(--dim); }
+.btn.on{ border-color:var(--or); color:var(--or); background:rgba(248,134,30,.18); }
+/* SELECT / START — 눕힌 알약 */
+.cap{ position:absolute; border:2px solid var(--dim); border-radius:99px;
       display:flex; align-items:center; justify-content:center;
-      font-size:8px; letter-spacing:1px; color:var(--dim); }
-.cap.on{ border-color:var(--or); color:var(--or); }
+      font-size:8px; letter-spacing:.5px; color:var(--dim); }
+.cap.on{ border-color:var(--or); color:var(--or); background:rgba(248,134,30,.18); }
+/* 알약 위에 붙는 이름표 (NES 처럼) */
+.caplbl{ position:absolute; font-size:7px; letter-spacing:1px; color:var(--dim);
+         text-align:center; pointer-events:none; }
+/* 탈출구는 항상 밝게. 흐리면 못 찾습니다. */
+.cap.up{ border-color:var(--or); color:var(--or); font-size:10px;
+         letter-spacing:1.5px; border-radius:8px; }
+.cap.up.on{ background:var(--or); color:var(--bg); }
+/* 글자 크기 조절 (왼쪽 판 위) */
+.fsbtn{ position:absolute; border:2px solid var(--dim); border-radius:6px;
+        display:flex; align-items:center; justify-content:center;
+        font-size:12px; color:var(--dim); }
+.fsbtn.on{ border-color:var(--or); color:var(--or); }
 
 #bar{ position:absolute; left:8px; right:8px; bottom:3px; display:flex;
       justify-content:space-between; font-size:9px; letter-spacing:1px;
       color:var(--dim); pointer-events:none; }
 /* 왼쪽 글자만 눌러서 템패드로 돌아갑니다 */
 #back{ pointer-events:auto; padding:2px 6px; margin:-2px -6px; }
-#note{ position:absolute; left:8px; right:8px; bottom:15px; font-size:9px;
+#note{ position:absolute; left:8px; right:8px; bottom:15px; font-size:calc(var(--fs) * .7);
        letter-spacing:1px; color:var(--or); text-align:center; pointer-events:none; }
 
 #rot{ position:fixed; inset:0; display:none; background:var(--bg);
@@ -91,6 +126,9 @@ html,body{
       <path d="M35 12 H65 V35 H88 V65 H65 V88 H35 V65 H12 V35 H35 Z"/>
     </svg>
     <div class="lbl" id="lblMove">MOVE</div>
+    <!-- 읽는 글자만 키웁니다. 버튼·십자키는 그대로입니다. -->
+    <div class="fsbtn" id="fsUp">A+</div>
+    <div class="fsbtn" id="fsDn">A-</div>
   </div>
 
   <div id="stage">
@@ -100,8 +138,13 @@ html,body{
 
   <div class="pane" id="paneR">
     <div id="info"></div>
-    <div class="cap" id="btnSel">SEL</div>
-    <div class="cap" id="btnSta">START</div>
+    <!-- ★ 항상 "한 단계 위로" 가는 버튼. 게임 중에는 유일한 탈출구입니다.
+         게임보이 버튼 8개는 전부 게임이 가져가기 때문입니다. -->
+    <div class="cap up" id="btnUp">MENU</div>
+    <div class="caplbl" id="lblSel">SELECT</div>
+    <div class="caplbl" id="lblSta">START</div>
+    <div class="cap" id="btnSel"></div>
+    <div class="cap" id="btnSta"></div>
     <div class="btn" id="btnB">B</div>
     <div class="btn" id="btnA">A</div>
   </div>
@@ -176,22 +219,52 @@ function fit(){
   $("paneL").style.left="0px";        $("paneL").style.width=gx+"px";
   $("paneR").style.left=(gx+gw)+"px"; $("paneR").style.width=(dw-gx-gw)+"px";
 
-  const ps = Math.max(64, Math.min(gx-26, dh-130, 140));
+  /* 왼쪽 판: 십자키 그림 + 글자 크기 버튼 (전부 고정 크기) */
+  const ps = Math.max(64, Math.min(gx-26, dh-150, 132));
   const ph = $("padHint");
   ph.style.width=ps+"px"; ph.style.height=ps+"px";
   ph.style.left=Math.round((gx-ps)/2)+"px";
-  ph.style.top=Math.round((dh-ps)/2-8)+"px";
+  ph.style.top=Math.round((dh-ps)/2)+"px";
   $("lblMove").style.left=Math.round((gx-32)/2)+"px";
-  $("lblMove").style.top=Math.round((dh+ps)/2+2)+"px";
+  $("lblMove").style.top=Math.round((dh+ps)/2+4)+"px";
+  /* 글자 크기 버튼은 왼쪽 판 맨 위에 나란히 */
+  const fw = 30, fh = 24, fgap = 8;
+  const fx = Math.round((gx - (fw*2+fgap))/2);
+  $("fsDn").style.cssText += `;left:${fx}px;top:10px;width:${fw}px;height:${fh}px;`;
+  $("fsUp").style.cssText += `;left:${fx+fw+fgap}px;top:10px;width:${fw}px;height:${fh}px;`;
 
+  /* ── 오른쪽 판: NES 패드 배치 ────────────────────────────────────
+     위에서부터  안내글 / MENU / SELECT·START 알약 / B·A 동그라미
+     버튼 크기는 전부 고정입니다 (손가락 크기라 글자와 무관).        */
   const rw = dw-gx-gw;
-  $("info").style.left="12px"; $("info").style.top=(gy+2)+"px";
+  $("info").style.left="12px";
+  $("info").style.top=(gy+2)+"px";
   $("info").style.width=(rw-20)+"px";
-  const bs = Math.max(38, Math.min(52, rw/2-16));
-  $("btnB").style.cssText += `;left:12px;top:${dh-bs-34}px;width:${bs}px;height:${bs}px;`;
-  $("btnA").style.cssText += `;left:${12+bs+10}px;top:${dh-bs-34}px;width:${bs}px;height:${bs}px;`;
-  $("btnSel").style.cssText += `;left:12px;top:${dh-bs-66}px;width:${bs}px;height:24px;`;
-  $("btnSta").style.cssText += `;left:${12+bs+10}px;top:${dh-bs-66}px;width:${bs}px;height:24px;`;
+
+  const bs   = 46;                    /* 동그란 버튼 지름 */
+  const gap  = 14;
+  const pillW = 40, pillH = 16;
+  const baseY = dh - 26;              /* 맨 아랫줄 기준 */
+
+  /* B 왼쪽, A 오른쪽 (NES 와 같게) */
+  const bx = Math.round((rw - (bs*2+gap))/2);
+  $("btnB").style.cssText += `;left:${bx}px;top:${baseY-bs}px;width:${bs}px;height:${bs}px;`;
+  $("btnA").style.cssText += `;left:${bx+bs+gap}px;top:${baseY-bs}px;width:${bs}px;height:${bs}px;`;
+
+  /* SELECT · START 는 그 위에 알약 두 개 + 이름표 */
+  const px = Math.round((rw - (pillW*2+gap))/2);
+  const py = baseY - bs - 12 - pillH;
+  $("btnSel").style.cssText += `;left:${px}px;top:${py}px;width:${pillW}px;height:${pillH}px;`;
+  $("btnSta").style.cssText += `;left:${px+pillW+gap}px;top:${py}px;width:${pillW}px;height:${pillH}px;`;
+  $("lblSel").style.cssText += `;left:${px}px;top:${py-11}px;width:${pillW}px;`;
+  $("lblSta").style.cssText += `;left:${px+pillW+gap}px;top:${py-11}px;width:${pillW}px;`;
+
+  /* 탈출구는 그 위에 넓게 */
+  const uw = pillW*2+gap;
+  const upY = py-11-30;
+  $("btnUp").style.cssText += `;left:${px}px;top:${upY}px;width:${uw}px;height:26px;`;
+  /* ★ 안내글은 MENU 버튼 위까지만. 안 그러면 글자를 키웠을 때 버튼을 덮습니다. */
+  $("info").style.height = Math.max(30, upY - (gy+2) - 8) + "px";
 
   $("diag").textContent = `${W}x${H} x${scale}`;
 }
@@ -203,79 +276,89 @@ function draw(){
   sc.style.visibility = playing ? "visible" : "hidden";
   pg.style.display = playing ? "none" : "block";
   $("note").textContent = st.notice || "";
+  $("btnUp").textContent = ui.upLabel();          /* ★ 어디로 가는지 글자로 */
 
   if (st.screen === "system"){
     pg.innerHTML = "<h2>SELECT SYSTEM</h2>" + GameUi.SYSTEMS.map((s,i) =>
       `<div class="row ${i===st.cursor?"sel":""}">${s.name}<div class="sub">${s.desc}</div></div>`
     ).join("");
     inf.innerHTML = `<div class="h">FIELD UNIT</div><hr>
-      <div class="v">CHOOSE A SYSTEM,<br>THEN A GAME.</div><br>
-      <div class="v">A &nbsp;SELECT<br>B &nbsp;BACK</div>`;
+      <div class="v">
+        &#9650;&#9660; &nbsp;MOVE<br>
+        A &nbsp;&nbsp;&nbsp;&nbsp;SELECT<br>
+        MENU &nbsp;TEMPAD
+      </div>`;
   }
   else if (st.screen === "list"){
     const list = ui.list();
-    pg.innerHTML = "<h2>" + (ui.systemName()) + "</h2>" + (list.length
+    pg.innerHTML = "<h2>" + ui.systemName() + "</h2>" + (list.length
       ? list.map((r,i) =>
           `<div class="row ${i===st.cursor?"sel":""}">${r.title}<div class="sub">${
             (r.hasSram?"SAVE ":"") + (r.states.some(Boolean)?"STATE ":"") + (r.note||"")}</div></div>`
         ).join("")
       : `<div class="empty">NO GAMES YET.<br><br>PRESS START TO ADD A FILE.</div>`);
     inf.innerHTML = `<div class="h">${list.length} GAME${list.length===1?"":"S"}</div><hr>
-      <div class="v">A &nbsp;&nbsp;PLAY<br>B &nbsp;&nbsp;BACK<br>
-      START ADD FILE<br>SEL &nbsp;REMOVE</div>`;
+      <div class="v">
+        &#9650;&#9660; &nbsp;MOVE<br>
+        A &nbsp;&nbsp;&nbsp;&nbsp;PLAY<br>
+        START ADD FILE<br>
+        SEL &nbsp;&nbsp;REMOVE<br>
+        MENU &nbsp;SYSTEM
+      </div>`;
   }
   else if (st.screen === "menu"){
-    pg.innerHTML = `<h2>PAUSED — ${st.title}</h2>` +
+    pg.innerHTML = `<h2>PAUSED</h2>` +
       ui.menuItems().map((m,i) =>
-        `<div class="row ${i===st.cursor?"sel":""}">${m.label}<div class="sub">${m.sub}</div></div>`
+        `<div class="row one ${i===st.cursor?"sel":""}">${m.label}<span class="sub">${m.sub}</span></div>`
       ).join("");
-    inf.innerHTML = `<div class="h">MENU</div><hr>
-      <div class="v">A &nbsp;&nbsp;CHOOSE<br>B &nbsp;&nbsp;RESUME</div>`;
+    inf.innerHTML = `<div class="h">${st.title}</div><hr>
+      <div class="v">
+        &#9650;&#9660; &nbsp;MOVE<br>
+        A &nbsp;&nbsp;&nbsp;&nbsp;CHOOSE<br>
+        START SAVE SLOT<br>
+        MENU &nbsp;RESUME
+      </div>`;
   }
   else {
     inf.innerHTML = `<div class="h">${st.title}</div><hr>
-      <div class="v">SEL+START<br>&nbsp;&nbsp;OPEN MENU</div>`;
+      <div class="v">PLAYING</div><br>
+      <div class="v">MENU BUTTON<br>&nbsp;&nbsp;SAVE / QUIT</div>`;
   }
+
+  /* ★ 고른 줄이 화면 밖으로 나가지 않게 따라갑니다.
+       목록이 길어지면 커서만 아래로 가고 화면은 그대로여서
+       "아무 반응이 없다"고 느끼게 됩니다.                              */
+  const selEl = pg.querySelector(".row.sel");
+  if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block:"nearest" });
 }
 
 /* ══ 조작 ═════════════════════════════════════════════════════════════ */
-let selHeld = false, staHeld = false;
-
 function onPress(name, down){
-  /* 게임 중이면 그대로 넘깁니다 */
-  if (ui.state.screen === "play"){
-    /* SELECT + START 를 같이 누르면 메뉴. 게임보이에 남는 버튼이 없어서 이렇게 씁니다. */
-    if (name === "select") selHeld = down;
-    if (name === "start")  staHeld = down;
-    if (selHeld && staHeld){
-      ui.press("select", false); ui.press("start", false);
-      selHeld = staHeld = false;
-      pad.releaseAll();
-      ui.openMenu(); draw(); return;
-    }
-    ui.press(name, down);
-    return;
-  }
-  if (!down) return;                      /* 목록에서는 누를 때만 반응 */
+  /* 게임 중에는 여덟 버튼을 전부 게임에 넘깁니다.
+     나가는 길은 MENU 버튼 하나뿐입니다. */
+  if (ui.state.screen === "play"){ ui.press(name, down); return; }
 
+  if (!down) return;                      /* 목록에서는 누를 때만 반응 */
   const st = ui.state;
-  if (name === "up")    { ui.move(-1); draw(); return; }
-  if (name === "down")  { ui.move(1);  draw(); return; }
+  if (name === "up")   { ui.move(-1); draw(); return; }
+  if (name === "down") { ui.move(1);  draw(); return; }
 
   if (st.screen === "system"){
-    if (name === "A"){ ui.pickSystem(GameUi.SYSTEMS[st.cursor].id).then(draw); }
+    if (name === "A") ui.pickSystem(GameUi.SYSTEMS[st.cursor].id).then(draw);
+    else if (name === "B") ui.exitToTempad();
     return;
   }
   if (st.screen === "list"){
-    if (name === "A")      { ui.play().then(draw); }
-    else if (name === "B") { ui.backToSystem(); draw(); }
-    else if (name === "start")  { $("file").click(); }
-    else if (name === "select") { ui.removeRom().then(draw); }
+    if (name === "A")           ui.play().then(draw);
+    else if (name === "B")      { ui.backToSystem(); draw(); }
+    else if (name === "start")  $("file").click();
+    else if (name === "select") ui.removeRom().then(draw);
     return;
   }
   if (st.screen === "menu"){
-    if (name === "A")      { ui.chooseMenu().then(draw); }
-    else if (name === "B") { ui.closeMenu(); draw(); }
+    if (name === "A")           ui.chooseMenu().then(draw);
+    else if (name === "start")  ui.saveMenu().then(draw);   /* 칸에 저장 */
+    else if (name === "B")      { ui.closeMenu(); draw(); }
     return;
   }
 }
@@ -294,6 +377,31 @@ async function fetchRom(path){
   return new Uint8Array(await res.arrayBuffer());
 }
 
+/* ══ 글자 크기 ═══════════════════════════════════════════════════════
+   ★ 읽는 글자만 바꿉니다. 버튼과 십자키는 고정입니다.
+     템패드 본체와 같은 이름표를 써서 설정이 이어집니다.              */
+const FS_KEY = "tempad.fs", FS_MIN = 9, FS_MAX = 26, FS_STEP = 1;
+let fsNow = 13;
+
+function applyFS(v){
+  fsNow = Math.max(FS_MIN, Math.min(FS_MAX, Math.round(v)));
+  document.documentElement.style.setProperty("--fs", fsNow + "px");
+  try{ localStorage.setItem(FS_KEY, String(fsNow)); }catch(e){}
+  $("fsDn").style.opacity = fsNow <= FS_MIN ? ".35" : "1";
+  $("fsUp").style.opacity = fsNow >= FS_MAX ? ".35" : "1";
+  if(ui) draw();                        /* 줄 높이가 바뀌니 다시 그립니다 */
+}
+
+function initFS(){
+  let v = 0;
+  try{ v = Number(localStorage.getItem(FS_KEY)); }catch(e){}
+  if(!isFinite(v) || v < FS_MIN || v > FS_MAX){
+    /* 저장된 게 없으면 손가락으로 쓰는 기기는 조금 크게 */
+    v = matchMedia("(pointer:coarse)").matches ? 16 : 13;
+  }
+  applyFS(v);
+}
+
 function boot(){
   ui = new GameUi.Ui({
     store: GameMode.RomStore,
@@ -301,6 +409,7 @@ function boot(){
     readFile: GameMode.readFile,
     fetchRom, loadWasm,
     canvas: $("screen"),
+    onExit: () => { location.href = "../"; },
   });
 
   pad = new GamePad4.Pad({ onPress });
@@ -308,6 +417,18 @@ function boot(){
     [$("btnA"), "A"], [$("btnB"), "B"],
     [$("btnSel"), "select"], [$("btnSta"), "start"],
   ]);
+
+  /* 글자 크기 버튼 */
+  const hookFs = (id, delta) => {
+    const el = $(id);
+    el.addEventListener("pointerdown", e => { e.preventDefault(); el.classList.add("on"); });
+    ["pointerup","pointercancel","pointerleave"].forEach(t =>
+      el.addEventListener(t, () => el.classList.remove("on")));
+    el.addEventListener("click", () => applyFS(fsNow + delta));
+  };
+  hookFs("fsUp",  FS_STEP);
+  hookFs("fsDn", -FS_STEP);
+  initFS();
 
   $("file").addEventListener("change", async e => {
     const f = e.target.files[0];
@@ -325,6 +446,20 @@ function boot(){
     location.href = "../";
   }
   $("back").addEventListener("click", leave);
+
+  /* ★ 한 단계 위로. 게임 중이면 이게 유일한 탈출구입니다. */
+  $("btnUp").addEventListener("pointerdown", e => {
+    e.preventDefault();
+    $("btnUp").classList.add("on");
+    if (pad) pad.releaseAll();            /* 눌린 채 남지 않게 */
+  });
+  ["pointerup","pointercancel","pointerleave"].forEach(t =>
+    $("btnUp").addEventListener(t, () => $("btnUp").classList.remove("on")));
+  $("btnUp").addEventListener("click", async () => {
+    const to = await ui.up();
+    if (to === "tempad") { leave(); return; }
+    draw();
+  });
 
   /* 폰의 뒤로가기로 나갈 때도 정리되게 */
   addEventListener("pagehide", () => {

@@ -120,6 +120,7 @@ console.log("\n[2] 목록에서 움직이기");
   ok("2번 칸 불러오기", await t8.ui.loadSlot(1)===true);
   ok("불러오면 메뉴 닫힘", t8.ui.state.screen==="play");
   ok("다른 칸은 여전히 비어있음", (t8.ui.openMenu(), await t8.ui.loadSlot(2)===false));
+  ok("★ 저장 칸이 아닌 데서 START 누르면 안내", (t8.ui.openMenu(), await t8.ui.saveMenu()===false));
 
   console.log("\n[8] ★ 끝내기");
   const t9=fresh(); await t9.ui.pickSystem("gb"); await t9.ui.play();
@@ -156,27 +157,65 @@ console.log("\n[2] 목록에서 움직이기");
   const keep=t13.ui.state.cursor;
   await t13.ui.play(); t13.ui.openMenu();
   ok("메뉴는 맨 위(RESUME)부터", t13.ui.state.cursor===0);
-  ok("메뉴 줄 수가 목록이 아니라 메뉴 것", t13.ui.rows()===8, t13.ui.rows());
+  ok("메뉴 줄 수가 목록이 아니라 메뉴 것", t13.ui.rows()===7, t13.ui.rows());
   t13.ui.move(-1);
-  ok("메뉴 맨 위에서 위 → 맨 아래(QUIT)", t13.ui.menuItems()[t13.ui.state.cursor].key==="quit");
+  ok("메뉴 맨 위에서 위 → 맨 아래(EXIT)", t13.ui.menuItems()[t13.ui.state.cursor].key==="tempad");
   t13.ui.move(1);
   ok("RESUME 고르면 게임으로", await t13.ui.chooseMenu()===true && t13.ui.state.screen==="play");
   ok("★ 목록 자리 기억함", t13.ui.state.cursor===keep, t13.ui.state.cursor+" vs "+keep);
 
-  t13.ui.openMenu(); t13.ui.move(2);               /* SAVE SLOT 2 */
-  ok("고른 게 SAVE SLOT 2", t13.ui.menuItems()[t13.ui.state.cursor].key==="save1");
-  ok("저장됨", await t13.ui.chooseMenu()===true);
-  ok("칸 표시가 USED 로 바뀜", t13.ui.menuItems()[2].sub==="USED", t13.ui.menuItems()[2].sub);
-  t13.ui.move(3);                                  /* LOAD SLOT 2 */
-  ok("고른 게 LOAD SLOT 2", t13.ui.menuItems()[t13.ui.state.cursor].key==="load1");
-  ok("불러와짐", await t13.ui.chooseMenu()===true && t13.ui.state.screen==="play");
+  t13.ui.openMenu(); t13.ui.move(2);               /* SLOT 2 */
+  ok("고른 게 SLOT 2", t13.ui.menuItems()[t13.ui.state.cursor].key==="slot1");
+  ok("빈 칸은 A 로 못 불러옴", await t13.ui.chooseMenu()===false);
+  ok("START 로 저장됨", await t13.ui.saveMenu()===true);
+  ok("칸 표시가 SAVED 로 바뀜", t13.ui.menuItems()[2].sub==="SAVED", t13.ui.menuItems()[2].sub);
+  ok("이제 A 로 불러와짐", await t13.ui.chooseMenu()===true && t13.ui.state.screen==="play");
 
   t13.ui.openMenu();
-  t13.ui.move(-1);                                 /* QUIT */
-  ok("QUIT 고르면 나감", await t13.ui.chooseMenu()===true);
+  t13.ui.move(4);                                  /* CHANGE GAME */
+  ok("고른 게 CHANGE GAME", t13.ui.menuItems()[t13.ui.state.cursor].key==="game");
+  ok("고르면 나감", await t13.ui.chooseMenu()===true);
   ok("에뮬 정지", !t13.ui.state.running);
   ok("목록으로", t13.ui.state.screen==="list");
   ok("★ 목록 자리 기억함", t13.ui.state.cursor===keep);
+
+  console.log("\n[13] ★ 어디서든 나갈 길이 있는가");
+  const t15=fresh();
+  ok("시스템 화면 → TEMPAD", t15.ui.upLabel()==="TEMPAD");
+  await t15.ui.pickSystem("gb");
+  ok("목록 → SYSTEM", t15.ui.upLabel()==="SYSTEM");
+  ok("실제로 감", (await t15.ui.up())==="system" && t15.ui.state.screen==="system");
+  await t15.ui.pickSystem("gb"); await t15.ui.play();
+  ok("게임 중 → MENU", t15.ui.upLabel()==="MENU");
+  ok("★ 게임 중 유일한 탈출구가 작동", (await t15.ui.up())==="menu" && t15.ui.state.screen==="menu");
+  ok("★ 게임이 멈춤", !t15.ui.state.running);
+  ok("메뉴 → RESUME", t15.ui.upLabel()==="RESUME");
+  ok("되돌아감", (await t15.ui.up())==="play" && t15.ui.state.running);
+
+  console.log("\n[14] ★ 메뉴에서 나가는 세 갈래");
+  const t16=fresh(); await t16.ui.pickSystem("gb"); await t16.ui.play();
+  t16.ui.openMenu(); t16.ui.move(5);               /* CHANGE SYSTEM */
+  ok("고른 게 CHANGE SYSTEM", t16.ui.menuItems()[t16.ui.state.cursor].key==="system");
+  await t16.ui.chooseMenu();
+  ok("기기 고르는 화면으로", t16.ui.state.screen==="system");
+  ok("에뮬 정지", !t16.ui.state.running);
+
+  const t17=fresh(); await t17.ui.pickSystem("gb"); await t17.ui.play();
+  t17.ui.openMenu(); t17.ui.move(6);               /* EXIT */
+  ok("고른 게 EXIT", t17.ui.menuItems()[t17.ui.state.cursor].key==="tempad");
+  await t17.ui.chooseMenu();
+  ok("★ 템패드로 나감 + 에뮬 정지", !t17.ui.state.running && t17.ui.state.screen==="system");
+
+  console.log("\n[15] ★ 갇히는 화면이 없는가");
+  for(const [name,setup] of [
+      ["시스템",  async u=>{}],
+      ["목록",    async u=>{ await u.pickSystem("gb"); }],
+      ["게임중",  async u=>{ await u.pickSystem("gb"); await u.play(); }],
+      ["메뉴",    async u=>{ await u.pickSystem("gb"); await u.play(); u.openMenu(); }]]){
+    const t=fresh(); await setup(t.ui);
+    const lbl=t.ui.upLabel();
+    ok(name+" 화면에 나가는 길이 보임", typeof lbl==="string" && lbl.length>0, lbl);
+  }
 
   console.log("\n[12] 시스템 화면 커서");
   const t14=fresh();

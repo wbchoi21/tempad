@@ -619,8 +619,18 @@ input[readonly]{cursor:pointer;}
       <button id="btnMin" title="Smallest">
         <svg viewBox="0 0 24 24"><path d="M9 3 V9 H3 M15 3 V9 H21 M9 21 V15 H3 M15 21 V15 H21"/></svg>
       </button>
-      <!-- 맨 아래에 붙는 디렉토리 + 종료 버튼 -->
-      <button id="btnDir" class="bottom" title="Directory">
+      <!-- 맨 아래에 붙는 게임 + 디렉토리 + 종료 버튼 -->
+      <button id="btnGames" class="bottom" title="Games">
+        <!-- 가로형 휴대게임기 -->
+        <svg viewBox="0 0 24 24">
+          <rect x="2" y="6.5" width="20" height="11" rx="2.5"/>
+          <rect x="9" y="9" width="6" height="6"/>
+          <path d="M4.5 12 H7 M5.75 10.75 V13.25"/>
+          <circle cx="17.5" cy="10.8" r="1"/>
+          <circle cx="19.4" cy="13.4" r="1"/>
+        </svg>
+      </button>
+      <button id="btnDir" title="Directory">
         <svg viewBox="0 0 24 24"><path d="M2.5 6h6.5l2 2.2h10.5V19H2.5z"/></svg>
       </button>
       <button id="btnExit" title="Shut down">
@@ -701,19 +711,6 @@ input[readonly]{cursor:pointer;}
                   <path d="M12.5 23.5 C 15.5 28.5, 24.5 28.5, 27.5 23.5"/>
                 </svg>
                 <div class="lb">AGENTS</div>
-              </div>
-              <!-- 게임 모드. 다른 화면과 달리 별도 페이지로 넘어갑니다.
-                   그래서 data-go 가 아니라 data-url 을 씁니다. -->
-              <div class="icon-cell" data-url="game/">
-                <!-- 가로형 휴대게임기 -->
-                <svg viewBox="0 0 40 40">
-                  <rect x="4" y="11" width="32" height="18" rx="4"/>
-                  <rect x="15" y="15" width="10" height="10"/>
-                  <path d="M8 20 H12 M10 18 V22"/>
-                  <circle class="ink" cx="29" cy="18" r="1.6"/>
-                  <circle class="ink" cx="32" cy="22" r="1.6"/>
-                </svg>
-                <div class="lb">GAMES</div>
               </div>
             </div>
           </div>
@@ -1466,7 +1463,7 @@ paintSound();
        2. 새 것이 준비되면 곧바로 한 번만 다시 켭니다
        3. 지금 어느 판인지 화면 아래에 찍습니다 (BUILD)
      3번이 있어야 "올린 게 반영됐나"를 눈으로 확인할 수 있습니다.        */
-const BUILD = "2026-08-10f";
+const BUILD = "2026-08-10h";
 /* 화면에 찍기 — 요소가 준비된 뒤에 */
 addEventListener("load", () => { const b=document.getElementById("bld"); if(b) b.textContent = "B"+BUILD.slice(5).replace(/-/g,""); });
 
@@ -1626,6 +1623,8 @@ document.querySelectorAll("[data-home]").forEach(b =>
    주소창이 안 뜨고, 뒤로가기로 돌아옵니다. */
 document.querySelectorAll("[data-url]").forEach(c =>
   c.addEventListener("click", () => { location.href = c.dataset.url; }));
+/* 왼쪽 세로줄의 게임 버튼 (디렉토리 바로 위) */
+$("btnGames").addEventListener("click", () => { location.href = "game/"; });
 
 document.querySelectorAll("[data-go]").forEach(c =>
   c.addEventListener("click", () => {

@@ -353,6 +353,22 @@ let fitPending  = false;
 let lastFitKey  = "";
 let insCache    = null;
 
+/* ★★ 화면 사진 기능 — **지금은 꺼져 있습니다.** ★★
+
+   끈 이유: GBA 는 사진이 안 찍힙니다. mGBA 가 WebGL 로 그리는데, WebGL 은
+   화면에 뿌린 뒤 그림판을 비워버립니다. 나중에 toDataURL 로 퍼오면 빈 그림이
+   나옵니다. 켜려면 알맹이를 만들 때 preserveDrawingBuffer 를 켜야 하는데,
+   그건 mgba.js 쪽 설정이라 우리가 손댈 수 없습니다.
+
+   게임보이·컬러만 되고 GBA 만 안 되면 목록이 들쭉날쭉해집니다.
+   그래서 **셋 다 끕니다.** (2026-08-11 사용자 지시)
+
+   ★ 되살리려면 이 한 줄을 true 로. 코드도 검사도 그대로 살아 있습니다.
+   ★ 여기 맨 위에 두는 이유 — draw() 가 이걸 씁니다. 아래에 선언하면
+     쓰는 곳이 선언보다 위가 되어 앱이 통째로 안 켜집니다.
+     이 프로젝트에서 같은 실수를 세 번 했습니다. */
+const SHOTS_ON = false;
+
 /* 시스템마다 화면 크기가 다릅니다 */
 const SCREENS = { gb:[160,144], gbc:[160,144], gba:[240,160] };
 const MARGIN = 12;
@@ -701,7 +717,7 @@ function draw(){
   /* ★ 고른 게임의 화면 사진을 목록 뒤에 깝니다.
        게임 중에는 안 깝니다 — 진짜 화면이 거기 있으니까요. */
   { const sh = $("shot");
-    const cur = (st.screen === "list" && ui.list) ? (ui.list()[st.cursor] || null) : null;
+    const cur = (SHOTS_ON && st.screen === "list" && ui.list) ? (ui.list()[st.cursor] || null) : null;
     const url = (cur && cur.shot) ? cur.shot : "";
     sh.style.backgroundImage = url ? `url("${url}")` : "";
     sh.style.display = (url && st.screen === "list") ? "block" : "none";
@@ -1005,6 +1021,7 @@ function boot(){
   const SHOT_AFTER_MS = 12000;
   let shotTimer = 0;
   function scheduleShot(){
+    if (!SHOTS_ON) return;
     if (shotTimer) { clearTimeout(shotTimer); shotTimer = 0; }
     shotTimer = setTimeout(async () => {
       shotTimer = 0;
@@ -1155,7 +1172,7 @@ function boot(){
             게임을 켜보지 않아도 목록에 바로 그림이 뜹니다.)
          ★ 사진이 없어도 아무 문제 없습니다 — 게임을 켜면 앱이 알아서 찍습니다. */
       const shots = new Map();
-      for (const f of files.filter(x => /\.png$/i.test(x.name || ""))) {
+      for (const f of (SHOTS_ON ? files.filter(x => /\.png$/i.test(x.name || "")) : [])) {
         try {
           const bytes = await (typeof f.read === "function" ? f.read() : readAsBytes(f));
           if (!bytes || bytes.length > 400 * 1024) continue;     /* 너무 크면 버립니다 */

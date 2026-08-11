@@ -231,6 +231,8 @@ Ui.prototype = {
     if (pending) return;
     const n = this.rows();
     if (!n) return;
+    /* 커서를 움직이는 것도 "봤다, 다음" 이라는 뜻입니다 (tapRow 참고) */
+    notice = "";
     cursor = (cursor + delta + n) % n;
   },
 
@@ -238,6 +240,7 @@ Ui.prototype = {
   setCursor(i) {
     if (pending) return false;
     if (!(i >= 0) || i >= this.rows()) return false;
+    notice = "";
     cursor = i;
     return true;
   },
@@ -256,6 +259,13 @@ Ui.prototype = {
     if (pending) return "busy";
     if (screen !== "list") return "none";
     if (!(i >= 0) || i >= romList.length) return "none";
+    /* ★ 아드님이 다음 행동을 하면 안내는 물러납니다.
+         "ADDED 21" 같은 글자가 목록을 훑는 내내 남아 있으면,
+         읽을 것도 없는데 자리만 차지하고 방금 일어난 일처럼 보입니다.
+       ★ 지우는 곳은 **여기(목록에서 뭔가를 누를 때)** 입니다.
+         화면 그리는 쪽에서 지우면 안 됩니다 — 게임 중에 떠야 하는
+         저장 실패 안내까지 같이 지워집니다(전에 그렇게 했다가 걸렸습니다). */
+    notice = "";
     if (i === cursor) {
       const ok = await this.play();
       return ok ? "play" : "fail";

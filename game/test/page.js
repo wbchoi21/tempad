@@ -1387,6 +1387,13 @@ console.log("\n[32-2] ★★ 게임 화면 사진이 목록 글자를 덮으면 
   ok("★ 게임 중에는 안 깔림 (진짜 화면이 거기 있음)",
      /st\.screen === "list"\) \? "block" : "none"/.test(src));
   ok("★ 사진이 없으면 아무것도 안 깔림", /url \? `url\("\$\{url\}"\)` : ""/.test(src));
+  /* ★ 지금은 기능 자체가 꺼져 있습니다 — GBA 가 WebGL 로 그려서 사진이
+       안 찍히고, 게임보이만 되면 목록이 들쭉날쭉해집니다.
+       스위치 한 줄이라 되살리기 쉽고, 위 배치 검사는 그대로 살아 있습니다. */
+  ok("★★ 지금은 꺼져 있음 (SHOTS_ON = false)", /const SHOTS_ON = false;/.test(src));
+  ok("★★ 스위치가 **선언보다 먼저** 있음 (안 그러면 앱이 통째로 안 켜짐)",
+     src.indexOf("const SHOTS_ON") < src.indexOf("SHOTS_ON &&"),
+     src.indexOf("const SHOTS_ON") + " vs " + src.indexOf("SHOTS_ON &&"));
 }
 
 console.log("\n[33] ★★ 파일 입력칸이 화면에 보이면 안 됩니다");

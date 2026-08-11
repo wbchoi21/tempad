@@ -504,6 +504,32 @@ console.log("\n[16] ★★ v2 — 손가락으로 줄 누르기 (첫 탭 = 고�
   ok("게임도 안 켜짐", t2.ui.state.screen==="list");
 }
 
+console.log("\n[16-2] ★★ 넣기 안내는 다음 행동에서 물러나야 합니다");
+{ /* "ADDED 21" 이 목록을 훑는 내내 남아 있으면 자리만 차지하고,
+     방금 일어난 일처럼 계속 보입니다. (2026-08-11 형님 지적)
+   ★ 지우는 곳은 목록에서 뭔가를 누를 때입니다. 화면 그리는 쪽에서
+     지우면 게임 중에 떠야 하는 저장 실패 안내까지 같이 지워집니다. */
+  const t=fresh(); await t.ui.pickSystem("gb");
+  await t.ui.addRoms([file("a.gb",{tag:1}), file("b.gb",{tag:2})]);
+  ok("(준비) 안내가 떴음", /ADDED 2/.test(t.ui.state.notice), t.ui.state.notice);
+  t.ui.move(1);
+  ok("★★★ 커서를 움직이면 물러남", t.ui.state.notice === "",
+     JSON.stringify(t.ui.state.notice));
+
+  const t2=fresh(); await t2.ui.pickSystem("gb");
+  await t2.ui.addRoms([file("c.gb",{tag:3})]);
+  ok("(준비) 안내가 떴음", /ADDED 1/.test(t2.ui.state.notice), t2.ui.state.notice);
+  await t2.ui.tapRow(1);
+  ok("★★★ 줄을 누르면 물러남", t2.ui.state.notice === "",
+     JSON.stringify(t2.ui.state.notice));
+
+  const t3=fresh(); await t3.ui.pickSystem("gb");
+  await t3.ui.addRoms([file("d.gb",{tag:4})]);
+  t3.ui.setCursor(0);
+  ok("★★ 손가락으로 줄을 골라도 물러남", t3.ui.state.notice === "",
+     JSON.stringify(t3.ui.state.notice));
+}
+
 console.log("\n[17] ★★ v2 — 토글 두 개 (컬러 / 조작판)");
 { const t=fresh();
   ok("기본은 템패드 주황", t.ui.state.colorReal===false);

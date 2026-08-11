@@ -148,6 +148,113 @@ const CASES = [
    /  press\(name, down\) \{\n    if \(screen !== "play"\) return false;/,
    '  press(name, down) {\n    if (false) return false;', "ui"],
 
+  /* ── zip 넣기 ─────────────────────────────────────────────────────── */
+  ["zip 이름의 경로를 안 벗기기 (../ 그대로)", "unzip.js",
+   /n = n\.replace\(.*?\);/, 'n = n;', "zip"],
+
+  ["암호 걸린 zip 을 그냥 풀기", "unzip.js",
+   /    if \(flag & 0x0001 \|\| flag & 0x0040 \|\| flag & 0x2000\) \{ skipped\.encrypted\+\+; continue; \}/,
+   '', "zip"],
+
+  ["모르는 압축 방식도 그냥 풀기", "unzip.js",
+   /    if \(method !== 0 && method !== 8\) \{ skipped\.method\+\+; continue; \}/, '', "zip"],
+
+  ["압축폭탄 비율 검사 제거", "unzip.js",
+   /    if \(csize > 0 && usize \/ csize > MAX_RATIO\) \{ skipped\.big\+\+; continue; \}/, '', "zip"],
+
+  ["푼 양이 적힌 것과 달라도 통과시키기", "unzip.js",
+   /        if \(n !== size\) throw new Error\("BROKEN ENTRY"\);/, '', "zip"],
+
+  ["CRC 검사 제거 (깨진 롬이 조용히 들어감)", "unzip.js",
+   /      if \(crc !== 0 && crc32\(out\) !== crc\) throw new Error\("BROKEN ENTRY"\);/, '', "zip"],
+
+  ["자료 위치를 중앙 디렉터리 길이로 계산 (로컬 것을 안 읽음)", "unzip.js",
+   /      const start = lho \+ 30 \+ hv\.getUint16\(26, true\) \+ hv\.getUint16\(28, true\);/,
+   '      const start = lho + 30 + hv.getUint16(26, true);', "zip"],
+
+  ["앞에 붙은 쓰레기 보정 제거", "unzip.js",
+   /    if \(d2 !== 0\) tries\.push\(d2\);/, '', "zip"],
+
+  ["맥 껍데기(__MACOSX) 거르기 제거", "unzip.js",
+   /    if \(isJunk\(full, base\)\) \{ skipped\.junk\+\+; continue; \}/, '', "zip"],
+
+  /* ZIP64·항목수 방어를 **둘 다** 걷어냅니다. 하나만 빼면 다른 하나가
+     대신 잡아서(중복 방어) 방해가 성립하지 않습니다. */
+  ["ZIP64·항목수 방어를 통째로 걷어내기", "unzip.js",
+   /  if \(rawCount === 0xFFFF \|\| cdSize === 0xFFFFFFFF \|\| rawOff === 0xFFFFFFFF\)\n    throw new Error\("UNSUPPORTED ZIP"\);\n  if \(count > MAX_ENTRIES\) throw new Error\("UNSUPPORTED ZIP"\);/,
+   '  void 0;', "zip"],
+
+  ["빈 zip 후보를 1차에서 바로 받기 (주석 속 가짜에 속음)", "unzip.js",
+   /    if \(c === 0 && sz === 0\) continue;/,
+   '    if (c === 0 && sz === 0) { eocd = abs; count = 0; break outer; }', "zip"],
+
+  /* ── 1차 교차검사(2026-08-11)가 잡아낸 구멍들. 고친 자리마다 방해를 답니다.
+        고쳐놓고 검사를 안 달면 다음 사람이 그대로 되돌립니다. ───────────── */
+  ["EOCD 주석 길이 검사 제거 (주석 속 가짜 표식에 속음)", "unzip.js",
+   /    if \(i \+ 22 \+ tdv\.getUint16\(i \+ 20, true\) === tail\.length\) strict\.push\(i\);\n    else loose\.push\(i\);/,
+   '    strict.push(i);', "zip"],
+
+  ["보정값이 맞는지 CEN 표식으로 확인하지 않기", "unzip.js",
+   /      if \(!\(await cenAt\(blob, of \+ d\)\)\) continue;/, '', "zip"],
+
+  ["보정값 0 을 먼저 안 써보기 (CD 뒤에 뭐가 끼면 통째로 깨짐)", "unzip.js",
+   /    const tries = \[0\];\n    const d2 = abs - \(of \+ sz\);\n    if \(d2 !== 0\) tries\.push\(d2\);/,
+   '    const tries = [abs - (of + sz)];\n    const d2 = 0;', "zip"],
+
+  ["무압축 항목의 크기 상한 제거 (거짓말 하나로 폰 메모리 폭발)", "unzip.js",
+   /        if \(end - start > maxBytes\) throw new Error\("ZIP BOMB"\);/, '', "zip"],
+
+  ["무압축 항목의 길이 확인 제거", "unzip.js",
+   /        if \(out\.length !== size\) throw new Error\("BROKEN ENTRY"\);/, '', "zip"],
+
+  ["압축비 상한을 다시 1000 으로 (잘 눌린 진짜 롬이 거절됨)", "unzip.js",
+   /const MAX_RATIO = 1100;/, 'const MAX_RATIO = 1000;', "zip"],
+
+  ["앞에 쓰레기 붙은 zip 을 아예 zip 으로 안 보기", "unzip.js",
+   /    if \(!\/\\\.zip\$\/i\.test\(String\(blob\.name \|\| ""\)\)\) return false;/,
+   '    return false;', "zip"],
+
+  ["공유 캐시 열쇠를 상대주소로 되돌리기 (넣는 곳과 찾는 곳이 어긋남)", "index.html",
+   /  const SHARE_KEY = location\.origin \+ "\/__tempad-shared";/,
+   '  const SHARE_KEY = "./shared";', "page"],
+
+  ["공유 파일을 넣기 전에 지우기 (실패하면 되찾을 수 없음)", "index.html",
+   /      await takeFiles\(\{ files: got, value: "" \}\);\n      \/\* ★ 지우는 것은 넣기가 \*\*끝난 뒤\*\*입니다[^]*?\*\/\n      for \(const k of keys\) await box\.delete\(k\);/,
+   '      for (const k of keys) await box.delete(k);\n      await takeFiles({ files: got, value: "" });', "page"],
+
+  ["공유 파일을 첫 개만 가져오기", "index.html",
+   /      for \(let i = 0; i < Math\.max\(want, 1\) && i < 50; i\+\+\)\{/,
+   '      for (let i = 0; i < 1; i++){', "page"],
+
+  ["넣는 중에 버려진 묶음을 말 안 하기", "index.html",
+   /      if \(droppedBatch\) \{\n        const n = droppedBatch; droppedBatch = 0;\n        ui\.warn\(\(ui\.state\.notice \? ui\.state\.notice \+ " \/ " : ""\) \+\n                n \+ " MORE NOT ADDED — TRY AGAIN"\);\n        draw\(\);\n      \}/,
+   '', "page"],
+
+  ["확인창이 떴을 때 말없이 돌아서기", "ui.js",
+   /    if \(pending\) \{ this\.warn\("FINISH THE QUESTION FIRST"\); return empty; \}/,
+   '    if (pending) return empty;', "ui"],
+
+  ["저장 실패인지 읽기 실패인지 안 밝히기 (게임 한두 개일 때)", "ui.js",
+   /    else if \(failSave\) parts\.push\("STORAGE FULL\?"\);\n    else if \(failRead\) parts\.push\("CANNOT READ FILES"\);/,
+   '', "ui"],
+
+  ["zip 안의 zip 을 그냥 버리기 (왜 비었는지 안 알려줌)", "unzip.js",
+   /    if \(\/\\\.zip\$\/i\.test\(base\)\) \{ skipped\.nested\+\+; continue; \}/, '', "zip"],
+
+  ["넣는 중에 또 넣기를 막지 않기", "index.html",
+   /    if \(importing\) \{ ui\.warn\("STILL ADDING — WAIT"\); draw\(\); return; \}/, '', "page"],
+
+  ["zip 줄을 폴더 고르기로 열기 (안드로이드에서 zip 을 못 고름)", "index.html",
+   /  function openZip\(\)\{ \$\("zip"\)\.click\(\); \}/,
+   '  function openZip(){ $(CAN_DIR ? "dir" : "file").click(); }', "page"],
+
+  ["공유로 받은 것을 안 가져오기", "index.html",
+   /  takeShared\(\);/, '', "page"],
+
+  ["가짜 FileReader 를 옛날처럼 (무엇을 줘도 롬을 돌려주게)", "test/page.js",
+   /        if \(!f \|\| !f\._bytes\) \{\n          if \(this\.onerror\) this\.onerror\(\{ error:new Error\("no bytes"\) \}\);\n          return;\n        \}\n        const b=new Uint8Array\(f\._bytes\);/,
+   '        const b=new Uint8Array((f && f._bytes) || makeRom());', "page"],
+
   ["_free 를 빼기 (메모리 새기 — 71번째 저장에서 죽던 버그)", "game.js",
    /    m\._file_data_delete\(ptr\);\n    m\._free\(ptr\);            \/\* ★ 껍데기까지 반납 \*\/\n    return out;/,
    '    m._file_data_delete(ptr);\n    return out;', "run"],

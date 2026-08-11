@@ -503,6 +503,11 @@ const RomStore = {
 
 /* 파일 선택창에서 고른 파일 읽기 */
 function readFile(file) {
+  /* ★ zip 에서 꺼낸 항목은 진짜 파일이 아니라 "나중에 풀 것" 입니다.
+       그런 것은 스스로 read() 를 갖고 있습니다. 그대로 불러줍니다.
+       ★ 이렇게 해야 zip 을 미리 다 풀지 않고, 넣는 쪽이 하나씩 요청할 때만
+         풉니다. 32MB 짜리 GBA 롬 20개를 한꺼번에 펼치면 폰이 죽습니다. */
+  if (file && typeof file.read === "function") return Promise.resolve(file.read());
   return new Promise((ok, no) => {
     const r = new FileReader();
     r.onerror = e => no(e.error);

@@ -178,7 +178,40 @@ function run(opts={}){
     setTimeout:(f,ms)=>{ timers.push({f,ms:ms||0,dead:false}); return timers.length; },
     clearTimeout:(h)=>{ const t=timers[h-1]; if(t) t.dead=true; },
     fetch:async()=>({ ok:true, arrayBuffer:async()=>makeRom(200,"BUNDLED").buffer }),
-    location:{ href:"", replace(u){ this.href=u; this._replaced=(this._replaced||0)+1; } },
+    /* search 는 "공유로 넘어왔는가"(?shared=1) 를 보는 데 씁니다 */
+    /* ★ origin 이 있어야 합니다 — 공유 캐시 열쇠를 여기서 만듭니다.
+         (넣는 쪽 sw.js 와 **같은 글자**가 되게 하려고 origin 을 씁니다.) */
+    location:{ href:"", origin:"http://x.test", search: opts.search || "",
+               replace(u){ this.href=u; this._replaced=(this._replaced||0)+1; } },
+    history:{ replaceState(){ } },
+    /* 공유로 받은 파일을 잠깐 넣어두는 곳 (서비스워커가 넣고 화면이 꺼냄).
+       ★ 진짜 Cache API 는 **꺼낸 응답이 독립**입니다 — 캐시에서 지워도
+         이미 손에 든 것은 그대로 읽힙니다. 가짜가 그걸 안 흉내내면
+         "지운 뒤에 읽기" 순서가 검사에서만 실패합니다 (실제로 그랬습니다). */
+    /* ★★ 상자 이름과 **열쇠를 진짜로 지킵니다.** ★★
+         전에는 open(name) 의 이름도 match(key) 의 열쇠도 통째로 무시했습니다.
+         그래서 넣는 쪽(sw.js)과 찾는 쪽(화면)의 열쇠가 **서로 달라서
+         공유가 한 번도 동작하지 않는 상태**를 이 검사가 볼 수 없었습니다.
+         가짜가 진짜보다 너그러우면, 통과는 아무것도 증명하지 않습니다.
+         서비스워커가 넣는 자리를 그대로 흉내내 origin 기준 열쇠로 담습니다. */
+    caches: opts.shared ? (() => {
+      const boxes = { "tempad-share": new Map() };
+      /* ★ 진짜 Cache API 는 **꺼낸 응답이 독립**입니다 — 캐시에서 지워도
+           이미 손에 든 것은 그대로 읽힙니다. 꺼내는 시점에 붙잡아둡니다. */
+      const one = v => ({ blob: async () => v,
+                          headers:{ get:()=>encodeURIComponent("shared.zip") } });
+      /* sw.js 와 같은 규칙으로 넣어둡니다 (여러 개면 -0, -1 …) */
+      const put = Array.isArray(opts.shared) ? opts.shared : [opts.shared];
+      put.forEach((b, i) => boxes["tempad-share"].set("http://x.test/__tempad-shared-" + i, b));
+      return { open: async name => {
+        const m = boxes[name] || (boxes[name] = new Map());
+        return {
+          match: async k => m.has(String(k)) ? one(m.get(String(k))) : undefined,
+          delete: async k => m.delete(String(k)),
+          put: async (k, v) => { m.set(String(k), v); },
+        };
+      } };
+    })() : undefined,
     AudioContext:function(){ return { sampleRate:48000, resume(){}, suspend(){}, currentTime:0,
       createBuffer:(c,n)=>({getChannelData:()=>new Float32Array(n)}),
       createBufferSource:()=>({connect(){},start(){}}) }; },
@@ -193,9 +226,19 @@ function run(opts={}){
     /* ★ 진짜 게임보이 롬처럼 닌텐도 로고를 넣어줍니다.
          전에는 0 으로 채운 버퍼라 판별기가 무조건 거절했고,
          그래서 "파일을 넣는다" 는 길이 검사에서 한 번도 안 돌았습니다. */
+    /* ★★★ 예전에는 `f._bytes || makeRom()` 이었습니다. ★★★
+         즉 **무엇을 넘겨도 멀쩡한 게임보이 롬을 돌려줬습니다.**
+         그러면 "파일을 넣었더니 게임이 들어왔다" 는 검사가 무엇을 넣든
+         통과합니다 — 아무것도 안 보는 검사입니다.
+         (2026-08-11 zip 기능 설계 검토에서 잡았습니다.)
+         이제 바이트가 없으면 진짜 FileReader 처럼 **실패**합니다. */
     FileReader:function(){
       this.readAsArrayBuffer=(f)=>{
-        const b=new Uint8Array((f && f._bytes) || makeRom());
+        if (!f || !f._bytes) {
+          if (this.onerror) this.onerror({ error:new Error("no bytes") });
+          return;
+        }
+        const b=new Uint8Array(f._bytes);
         this.onloadend({target:{result:b.buffer}});
       };
     },
@@ -205,13 +248,21 @@ function run(opts={}){
     indexedDB: opts.noDb ? undefined : makeIDB(),
     Uint8Array, Uint8ClampedArray, Math, JSON, Promise, Number, String, Object, Array,
     Date, Error, isFinite, Set, Map, RegExp, Boolean,
+    /* ★ unzip.js 가 쓰는 것들. 이게 없으면 그 파일이 샌드박스에서 아예
+         로드되지 않아서, zip 배선 검사가 통째로 무의미해집니다. */
+    ArrayBuffer, DataView, Int32Array, TextDecoder, Blob, Response,
+    DecompressionStream: (typeof DecompressionStream !== "undefined") ? DecompressionStream : undefined,
   };
   sandbox.window=sandbox;
   sandbox.globalThis=sandbox;
   if(opts.mgba) sandbox.MgbaCore = { load: async()=>({core:"mgba"}) };
   vm.createContext(sandbox);
-  /* 부품들을 먼저 넣습니다 (실제 <script src> 순서와 같게) */
-  for(const f of ["game.js","ui.js","pad.js"])
+  /* 부품들을 먼저 넣습니다 (실제 <script src> 순서와 같게).
+     ★ unzip.js 는 opts.noZip 이면 안 넣습니다 — 옛 서비스워커가 살아있어서
+       그 파일만 404 인 폰을 흉내내려는 것입니다. 그때도 나머지가 멀쩡해야 합니다. */
+  const parts = ["game.js","ui.js","pad.js"];
+  if (!opts.noZip) parts.push("unzip.js");
+  for(const f of parts)
     vm.runInContext(fs.readFileSync(path.join(D,f),"utf8"), sandbox, {filename:f});
   /* 가짜 에뮬레이터 알맹이 — 샌드박스 안에서 만듭니다 */
   vm.runInContext(`
@@ -306,6 +357,15 @@ function tapNode(page, n, opt={}){
      짧게 기다리면 **목록이 아직 안 온 채로** 검사하게 되어,
      제품은 멀쩡한데 검사만 실패합니다. 실제로 여기서 한 번 헛짚었습니다. */
 const wait = async (n=25) => { for(let i=0;i<n;i++) await new Promise(r=>setTimeout(r,1)); };
+
+/* ★★ 여러 개 넣기(addRoms)는 4개마다 `setTimeout(0)` 으로 화면에 양보합니다.
+     그런데 샌드박스의 setTimeout 은 **가짜**라(모아뒀다 flush 로 터뜨림)
+     그냥 기다리면 **거기서 영원히 멈춥니다.**
+     그래서 기다리기와 시계 터뜨리기를 번갈아 합니다.
+     (이걸 몰라서 zip 검사가 통째로 "아무것도 안 들어왔다" 로 나왔습니다.) */
+const settle = async (r, rounds=12) => {
+  for (let i=0;i<rounds;i++){ r.flush(); await wait(6); }
+};
 /* 화면 상태를 읽습니다 */
 const S = r => r.read("ui.state");
 
@@ -1011,6 +1071,225 @@ console.log("\n[26] ★★★ 저장 실패 안내가 **실제 화면에** 떠�
   await wait();
   ok("★★★ 다음 시도에서 **다시** 뜸 (한 번 놓쳐도 됨)",
      /COULD NOT SAVE/.test(r.els.note.textContent), r.els.note.textContent);
+}
+
+console.log("\n[27] ★★ zip 넣기 배선 — 화면 쪽이 제대로 이어졌는가");
+{ const { makeZip, gbRom, gbaRom } = require("./_zipmake.js");
+  const r=run(); await wait();
+  tapNode(r.els.page, node({s:"gb"})); await wait();
+  const before = S(r).count;
+
+  ok("★ 목록에 + ADD ZIP 줄이 보임", /data-add="zip"/.test(r.els.page.innerHTML));
+  ok("★ zip 전용 입력칸이 있음", !!r.els.zip);
+  /* ★ 소스에서 직접 봅니다. (`|| true` 로 끝나는 단언은 아무것도 안 봅니다 —
+       실제로 처음에 그렇게 써놨다가 바로 고쳤습니다.) */
+  ok("★★ zip 입력칸의 accept 에 .zip 과 MIME 이 둘 다 있음",
+     /<input[^>]*id="zip"[^>]*accept="[^"]*\.zip[^"]*application\/zip/.test(html),
+     (html.match(/<input[^>]*id="zip"[^>]*>/)||[""])[0].slice(0,110));
+  ok("★★ zip 입력칸은 폴더 고르기가 아님 (안드로이드에서 zip 을 고를 수 있어야)",
+     !/<input[^>]*id="zip"[^>]*webkitdirectory/.test(html));
+
+  /* zip 을 골랐다고 알려줍니다 */
+  const zipBuf = makeZip([
+    { name:"games/AAA.gb",  data: gbRom("AAA", {tag:41}) },
+    { name:"BBB.gbc",       data: gbRom("BBB", {cgb:0xC0, tag:42}) },
+    { name:"CCC.gba",       data: gbaRom("CCC", {tag:43}) },
+    { name:"__MACOSX/._AAA.gb", data: Buffer.alloc(100) },
+    { name:"readme.txt",    data: Buffer.from("hi") },
+  ]);
+  r.els.zip.files = [ new Blob([zipBuf]) ];
+  r.els.zip.files[0].name = "games.zip";
+  r.els.zip.fire("change", { target:r.els.zip });
+  await settle(r);
+
+  ok("★★★ zip 안의 게임보이 롬이 목록에 들어옴", S(r).count === before + 1,
+     S(r).count + " (전 " + before + ")");
+  ok("★ 안내에 개수가 나옴", /ADDED 3/.test(S(r).notice), S(r).notice);
+  ok("★★ 다른 기기 것도 갔다고 알려줌", /IN OTHER SYSTEMS/.test(S(r).notice), S(r).notice);
+
+  /* 진짜로 GBC·GBA 목록에 들어갔는지 봅니다 */
+  tap(r.els.zMain); await wait();
+  tapNode(r.els.page, node({s:"gbc"})); await wait();
+  ok("★★★ GBC 목록에 BBB 가 있음", r.read("ui.list().some(x=>x.title==='BBB')"),
+     r.read("ui.list().map(x=>x.title).join('|')"));
+  tap(r.els.zMain); await wait();
+  tapNode(r.els.page, node({s:"gba"})); await wait();
+  ok("★★★ GBA 목록에 CCC 가 있음", r.read("ui.list().some(x=>x.title==='CCC')"),
+     r.read("ui.list().map(x=>x.title).join('|')"));
+}
+
+console.log("\n[28] ★★ zip 이 깨졌거나 암호가 걸렸을 때 — 이유가 떠야 함");
+{ const { makeZip, gbRom } = require("./_zipmake.js");
+  for (const [name, buf, want] of [
+    ["깨진 zip", Buffer.from("PK\x03\x04 이건 깨진 파일입니다 한참 길게 써봅니다"), /BROKEN ZIP/],
+    ["암호 zip", makeZip([{ name:"L.gb", data: gbRom("L",{tag:44}), flags:0x0001 }]), /PASSWORD/],
+  ]){
+    const r=run(); await wait();
+    tapNode(r.els.page, node({s:"gb"})); await wait();
+    const n0 = S(r).count;
+    r.els.zip.files = [ new Blob([buf]) ];
+    r.els.zip.files[0].name = "x.zip";
+    r.els.zip.fire("change", { target:r.els.zip });
+    await settle(r);
+    ok("★★ " + name + " → 이유가 화면에 뜸", want.test(S(r).notice), S(r).notice);
+    ok("  " + name + " → 아무것도 안 들어감", S(r).count === n0, S(r).count);
+    ok("  " + name + " → 갇히지 않음", S(r).screen === "list", S(r).screen);
+  }
+}
+
+console.log("\n[29] ★ unzip.js 가 없어도 나머지는 멀쩡해야 함");
+{ /* 옛 서비스워커가 살아있는 폰에서는 index.html 만 새것이고
+     unzip.js 가 404 일 수 있습니다. */
+  const r=run({noZip:true}); await wait();
+  ok("★ 코드가 끝까지 돔", !r.err, r.err && r.err.message);
+  tapNode(r.els.page, node({s:"gb"})); await wait();
+  ok("★ 목록이 정상", S(r).screen === "list" && S(r).count === 3, S(r).count);
+  ok("★★ ADD ZIP 줄은 아예 안 보임 (눌러도 안 되는 버튼보다 나음)",
+     !/data-add="zip"/.test(r.els.page.innerHTML));
+  ok("★ 평범한 롬 넣기는 그대로 됨", (()=>{
+      r.els.file.files=[fakeFile("N.gb", 77, "NORMAL")];
+      r.els.file.fire("change",{target:r.els.file});
+      return true; })());
+  await wait();
+  ok("★★ 실제로 들어감", S(r).count === 4, S(r).count);
+}
+
+console.log("\n[30] ★★ 넣는 중에 또 넣기를 누르면 겹쳐 돌면 안 됨");
+{ const { makeZip, gbRom } = require("./_zipmake.js");
+  const r=run(); await wait();
+  tapNode(r.els.page, node({s:"gb"})); await wait();
+  const before = S(r).count;
+  const buf = makeZip([
+    { name:"P1.gb", data: gbRom("P1",{tag:51}) },
+    { name:"P2.gb", data: gbRom("P2",{tag:52}) },
+  ]);
+  const mk = () => { const b = new Blob([buf]); b.name = "p.zip"; return b; };
+  /* 두 번 연달아 — 기다리지 않고 */
+  r.els.zip.files = [ mk() ]; r.els.zip.fire("change", { target:r.els.zip });
+  r.els.zip.files = [ mk() ]; r.els.zip.fire("change", { target:r.els.zip });
+  await settle(r);
+  ok("★★★ 두 개만 늘어남 (겹쳐 돌지 않음)", S(r).count === before + 2,
+     S(r).count + " (전 " + before + ")");
+  /* ★★ 개수만 보면 이 검사는 **아무것도 증명하지 못합니다.** 같은 zip 이라
+       내용 기준 중복 걸러내기 때문에, 잠금이 없어 겹쳐 돌아도 개수는 똑같이
+       before+2 입니다. 마지막에 **화면에 남는 글자**를 봐야 합니다.
+       전에는 "STILL ADDING — WAIT" 가 잠깐 떴다가 "ADDED 2" 로 덮여서,
+       아드님은 두 번째 zip 도 들어간 줄 알았습니다. */
+  ok("★★★ 버려진 묶음이 있다고 화면에 남음", /NOT ADDED — TRY AGAIN/.test(S(r).notice),
+     S(r).notice);
+}
+
+console.log("\n[30-2] ★★ 삭제 물음표가 떠 있는 동안 넣으면 — 말없이 사라지면 안 됨");
+{ const { makeZip, gbRom } = require("./_zipmake.js");
+  const r=run(); await wait();
+  tapNode(r.els.page, node({s:"gb"})); await wait();
+  /* 내 게임 하나를 길게 눌러 확인창을 띄웁니다 (기본 게임은 못 지웁니다) */
+  r.els.file.files=[fakeFile("QMINE.gb", 93, "QMINE")];
+  r.els.file.fire("change",{target:r.els.file}); await wait();
+  const mine = r.read("ui.list().findIndex(x=>!x.bundled)");
+  tapNode(r.els.page, node({i:String(mine)}), {hold:true});
+  r.flush(); await wait();
+  ok("(준비) 확인창이 떠 있음", S(r).confirm !== null, S(r).screen);
+  const before = S(r).count;
+  const buf = makeZip([{ name:"Q1.gb", data: gbRom("Q1",{tag:71}) },
+                       { name:"Q2.gb", data: gbRom("Q2",{tag:72}) }]);
+  const b = new Blob([buf]); b.name = "q.zip";
+  r.els.zip.files = [b]; r.els.zip.fire("change", { target:r.els.zip });
+  await settle(r);
+  ok("★ 아무것도 안 들어감 (확인창이 먼저)", S(r).count === before, S(r).count);
+  /* ★★ 여기가 핵심입니다. 전에는 **말없이** 돌아섰습니다.
+       12개짜리 zip 이 통째로 사라졌는데 안내칸이 텅 비어 있었습니다. */
+  ok("★★★ 왜 안 됐는지 화면에 뜸", /FINISH THE QUESTION/.test(S(r).notice), S(r).notice);
+}
+
+console.log("\n[30-3] ★★ 덜 받은 zip 은 '다시 받아라' 고 해야 함");
+{ /* 카톡 전송이 끊기면 앞부분만 옵니다. 22바이트도 안 되면 zip 판정 자체를
+     통과 못 해서, 전에는 "NOT A GAME FILE" 이 떴습니다. 그건 다시 받으라는
+     말이 아니라 파일이 잘못됐다는 말로 들립니다. */
+  const r=run(); await wait();
+  tapNode(r.els.page, node({s:"gb"})); await wait();
+  const b = new Blob([Buffer.from("PK\x03\x04")]); b.name = "roms.zip";
+  r.els.zip.files = [b]; r.els.zip.fire("change", { target:r.els.zip });
+  await settle(r);
+  ok("★★★ 다시 받으라고 말해줌", /GET IT AGAIN/.test(S(r).notice), S(r).notice);
+}
+
+console.log("\n[31] ★★ 안드로이드 '공유 → TEMPAD' 로 넘어온 zip");
+{ const { makeZip, gbRom } = require("./_zipmake.js");
+  const zipBuf = makeZip([
+    { name:"SHARED1.gb", data: gbRom("SHARED1", {tag:61}) },
+    { name:"SHARED2.gb", data: gbRom("SHARED2", {tag:62}) },
+  ]);
+  const r = run({ search:"?shared=1", shared:new Blob([zipBuf]) });
+  await settle(r);
+  tapNode(r.els.page, node({s:"gb"})); await settle(r);
+  ok("★★★ 공유로 온 zip 이 저절로 들어감",
+     r.read("ui.list().some(x=>x.title==='SHARED1')")
+     && r.read("ui.list().some(x=>x.title==='SHARED2')"),
+     r.read("ui.list().map(x=>x.title).join('|')"));
+
+  /* ★★ 여러 개를 한꺼번에 공유하는 경우. 전에는 서비스워커가 form.get 을
+       써서 **첫 개만** 넣어두고 나머지는 말없이 사라졌습니다. */
+  const z2 = makeZip([{ name:"M2.gb", data: gbRom("M2", {tag:63}) }]);
+  const multi = run({ search:"?shared=2", shared:[new Blob([zipBuf]), new Blob([z2])] });
+  await settle(multi);
+  tapNode(multi.els.page, node({s:"gb"})); await settle(multi);
+  ok("★★★ 두 개를 공유하면 둘 다 들어감",
+     multi.read("ui.list().some(x=>x.title==='SHARED1')")
+     && multi.read("ui.list().some(x=>x.title==='M2')"),
+     multi.read("ui.list().map(x=>x.title).join('|')"));
+
+  /* ★★ 공유가 왔다는데 파일이 없으면 **그렇다고 말해야** 합니다.
+       전에는 화면만 열리고 끝이라, 아무 일도 안 일어난 것과 구분이 안 됐습니다. */
+  const lost = run({ search:"?shared=1", shared:[] });
+  await settle(lost);
+  ok("★★★ 공유가 왔는데 파일이 없으면 말해줌", /SHARE FAILED/.test(S(lost).notice),
+     JSON.stringify(S(lost).notice));
+
+  /* ★ 두 번 들어가면 안 됩니다 — 새로고침할 때마다 또 넣으면 곤란합니다 */
+  const again = run({ search:"?shared=1", shared:null });
+  await settle(again);
+  ok("★★ 넣어둔 것이 없으면 아무 일도 안 일어남", !again.err, again.err && again.err.message);
+
+  /* ★ 공유가 아닐 때는 건드리지 않아야 합니다 */
+  const plain = run();
+  await settle(plain);
+  ok("★ 평범하게 열면 그대로", !plain.err && plain.read("ui.state.screen") === "system",
+     plain.read("ui.state.screen"));
+}
+
+console.log("\n[32] ★ 공유 설정이 실제로 적혀 있는가 (app.json · sw.js)");
+{ const fsx = require("fs");
+  const manifest = JSON.parse(fsx.readFileSync(path.join(D,"..","app.json"),"utf8"));
+  const st = manifest.share_target;
+  ok("★★ app.json 에 share_target 이 있음", !!st);
+  ok("★ POST 로 받음", st && st.method === "POST" && st.enctype === "multipart/form-data",
+     st && st.method + "/" + st.enctype);
+  ok("★★ 파일 이름표가 sw.js 와 같음 (drop)",
+     st && st.params && st.params.files && st.params.files[0].name === "drop",
+     st && JSON.stringify(st.params));
+  ok("★ zip 을 받겠다고 적혀 있음",
+     st && /application\/zip/.test(JSON.stringify(st.params.files[0].accept)));
+
+  const sw = fsx.readFileSync(path.join(D,"..","sw.js"),"utf8");
+  ok("★★ sw.js 가 그 이름표로 꺼냄 (여러 개라 getAll)", /form\.getAll\("drop"\)/.test(sw));
+  ok("★★★ 공유 분기는 POST 일 때만 (GET 은 안 건드림)",
+     /req\.method === "POST"/.test(sw) && /if\(req\.method !== "GET"\) return;/.test(sw));
+  /* ★ 전에는 `/shared=1/.test(sw)` 였습니다 — **글자가 있는지만** 봤습니다.
+       어디로 보내는지는 아무도 안 봤고, 실제로 **본체 화면**으로 가고
+       있었습니다(그쪽엔 받아가는 코드가 없습니다). 공유 기능이 만든 뒤로
+       한 번도 동작한 적이 없는데 검사는 통과했습니다.
+       서비스워커 안의 상대주소는 **워커 스크립트 자리** 기준으로 풀립니다. */
+  ok("★★★ 받은 뒤 보내는 곳이 게임 화면 (요청 주소 기준으로 품)",
+     /new URL\(\s*"\.\/index\.html\?shared=" \+ n\s*,\s*req\.url\s*\)/.test(sw));
+  /* ★ 넣는 곳과 찾는 곳의 열쇠가 같아야 합니다. 상대주소면 부르는 쪽마다
+       달라져서, 넣어둔 것을 영영 못 찾습니다. */
+  const pg = fsx.readFileSync(path.join(D,"index.html"),"utf8");
+  const key = s => ((s.match(/const SHARE_KEY\s*=\s*(.+?);/)||[])[1]||"").replace(/^self\./,"").trim();
+  ok("★★★ 공유 캐시 열쇠가 sw.js 와 게임화면에서 같음",
+     !!key(sw) && key(sw) === key(pg), key(sw) + " vs " + key(pg));
+  ok("★★ 옛 저장분을 지울 때 공유 상자는 남김",
+     /k !== VERSION && k !== SHARE_BOX/.test(sw));
 }
 
 console.log(`\n${"=".repeat(46)}\n통과 ${pass}  실패 ${fail}\n`);

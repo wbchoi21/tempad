@@ -581,6 +581,31 @@ console.log("\n[19] ★ 여러 개 한꺼번에 넣기");
   ok("★ 연달아 실패하면 그만둠", r4.stopped==="SAVE", String(r4.stopped));
   ok("★ 20개를 다 시도하지 않음", r4.failed===3, r4.failed);
   ok("이유를 제대로 씀", /STORAGE FULL/.test(t3.ui.state.notice), t3.ui.state.notice);
+
+  /* ★★ 게임이 **한두 개뿐인** zip 은 아무리 실패해도 연속 3회가 안 나옵니다.
+       그래서 전에는 "ADDED 0 / 1 FAILED" 만 뜨고 **용량 이야기가 없었습니다.**
+       아드님은 zip 이 잘못된 줄 알고 다시 받으러 갑니다 — 정반대 진단입니다. */
+  const t5=fresh({addFail:true}); await t5.ui.pickSystem("gb");
+  const r5=await t5.ui.addRoms([file("solo.gb",{tag:88})]);
+  ok("★ 하나만 넣다 실패해도 셈은 맞음", r5.added===0 && r5.failed===1, JSON.stringify(r5));
+  ok("★★★ 하나뿐이어도 용량 이야기를 해줌",
+     /STORAGE FULL/.test(t5.ui.state.notice), t5.ui.state.notice);
+  ok("★ 그런데 '그만뒀다' 고는 안 함 (그만둘 것도 없었음)",
+     !/STOPPED/.test(t5.ui.state.notice), t5.ui.state.notice);
+
+  /* ★★ 확인창이 떠 있는 동안 넣으면 **말없이** 돌아서면 안 됩니다.
+       12개짜리 zip 이 통째로 사라진 채 안내칸이 비어 있었습니다. */
+  const t6=fresh(); await t6.ui.pickSystem("gb");
+  await t6.ui.addRom(file("Q.gb",{tag:87}));
+  ok("(준비) 확인창이 떴음",
+     t6.ui.askRemove(t6.ui.list().findIndex(x=>!x.bundled)) && t6.ui.state.confirm !== null,
+     JSON.stringify(t6.ui.state.confirm));
+  const n6=t6.ui.state.count;
+  const r6=await t6.ui.addRoms([file("z1.gb",{tag:86}), file("z2.gb",{tag:85})]);
+  ok("★ 확인창 중에는 안 들어감", r6.added===0 && t6.ui.state.count===n6,
+     JSON.stringify(r6));
+  ok("★★★ 왜 안 됐는지 말해줌", /FINISH THE QUESTION/.test(t6.ui.state.notice),
+     JSON.stringify(t6.ui.state.notice));
 }
 
 console.log("\n[20] ★ 기본 게임 지키기 — 이름이 같은 남의 롬이 들어와도");

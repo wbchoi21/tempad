@@ -14,9 +14,16 @@ let CASES;
 try { CASES = eval(body + "\nCASES"); }
 catch (e) { console.error("CASES 를 못 읽었습니다: " + e.message); process.exit(2); }
 
+/* ★ 방해검사가 건드리는 파일을 **그 목록에서 뽑아** 읽습니다.
+     예전에는 여기에 파일 이름을 손으로 적어놨는데, 방해검사에 새 파일이
+     추가되면 감사가 그냥 터졌습니다 (test/page.js 를 추가했을 때 그랬습니다). */
 const files = {};
-for (const f of ["ui.js", "game.js", "pad.js", "index.html"])
-  files[f] = fs.readFileSync(path.join(D, f), "utf8");
+const wanted = new Set(["ui.js", "game.js", "pad.js", "index.html", "unzip.js"]);
+for (const c of CASES) wanted.add(c[1]);
+for (const f of wanted) {
+  try { files[f] = fs.readFileSync(path.join(D, f), "utf8"); }
+  catch (e) { console.error("★ 못 읽음: " + f); process.exit(2); }
+}
 
 let bad = 0;
 console.log("=== 1. 방해가 남아 있는가 (대체 문자열이 파일에 있으면 사고) ===");
@@ -65,6 +72,33 @@ const MUST = [
   ["index.html", /\$\(id\)\.style\.display = \(showPad && isGba\) \? "flex" : "none";/, 1, "조작판 끄면 L·R 도 숨김"],
   ["index.html", /esc\(r\.title\)/, 1, "게임 이름 감싸기"],
   ["index.html", /addEventListener\("pointerup"/, 2, "click 대신 pointerup"],
+  /* ── zip 넣기 ─────────────────────────────────────────────────────── */
+  ["unzip.js", /n = n\.replace\(/, 1, "zip 이름의 경로 벗기기 (../ 막기)"],
+  ["unzip.js", /skipped\.encrypted\+\+/, 1, "암호 걸린 항목 건너뛰기"],
+  ["unzip.js", /crc32\(out\) !== crc/, 1, "CRC 로 깨진 롬 잡기"],
+  ["unzip.js", /if \(n !== size\) throw/, 1, "푼 양이 적힌 것과 같은가"],
+  ["unzip.js", /usize \/ csize > MAX_RATIO/, 1, "압축폭탄 비율 검사"],
+  ["unzip.js", /hv\.getUint16\(26, true\) \+ hv\.getUint16\(28, true\)/, 1, "자료 위치는 로컬 헤더로"],
+  ["unzip.js", /const d2 = abs - \(of \+ sz\)/, 1, "앞에 붙은 쓰레기 보정"],
+  ["unzip.js", /i \+ 22 \+ tdv\.getUint16\(i \+ 20, true\) === tail\.length/, 1, "EOCD 주석 길이 맞추기 (가짜 표식 방지)"],
+  ["unzip.js", /await cenAt\(blob, of \+ d\)/, 1, "보정값을 CEN 표식으로 확인"],
+  ["unzip.js", /const tries = \[0\];/, 1, "보정값 0 을 먼저 시도"],
+  ["unzip.js", /    if \(c === 0 && sz === 0\) continue;/, 1, "빈 zip 후보는 1차에서 안 받음"],
+  ["unzip.js", /rawCount === 0xFFFF \|\| cdSize === 0xFFFFFFFF \|\| rawOff === 0xFFFFFFFF/, 1, "ZIP64 감시값 (고른 뒤에 검사)"],
+  ["unzip.js", /skipped\.nested\+\+/, 1, "zip 안의 zip 은 따로 세어 알려줌"],
+  ["ui.js", /this\.warn\("FINISH THE QUESTION FIRST"\)/, 1, "확인창 중 넣기는 말하고 거절"],
+  ["ui.js", /else if \(failSave\) parts\.push\("STORAGE FULL\?"\);/, 1, "저장 실패 이유 밝히기"],
+  ["index.html", /MORE NOT ADDED — TRY AGAIN/, 1, "버려진 묶음을 반드시 말함"],
+  ["index.html", /BROKEN ZIP FILE — GET IT AGAIN/, 1, "덜 받은 zip 은 다시 받으라고 함"],
+  ["unzip.js", /if \(end - start > maxBytes\) throw/, 1, "무압축 항목도 크기 상한"],
+  ["unzip.js", /if \(out\.length !== size\) throw/, 1, "무압축 항목도 길이 확인"],
+  ["unzip.js", /const MAX_RATIO = 1100;/, 1, "압축비 상한은 deflate 최대(1032)보다 위"],
+  ["index.html", /const SHARE_KEY = location\.origin \+ "\/__tempad-shared";/, 1, "공유 열쇠는 절대주소 (sw.js 와 같아야)"],
+  ["unzip.js", /isJunk\(full, base\)/, 1, "맥 껍데기(__MACOSX) 거르기"],
+  ["unzip.js", /new DecompressionStream\("deflate-raw"\); _rawOk = true/, 1, "deflate-raw 실제로 재보기"],
+  ["index.html", /if \(importing\)/, 1, "넣는 중 겹쳐 돌기 막기"],
+  ["index.html", /function openZip\(\)\{ \$\("zip"\)\.click\(\); \}/, 1, "zip 은 파일 고르기(폴더 아님)"],
+  ["index.html", /takeShared\(\);/, 1, "공유로 받은 것 가져오기"],
 ];
 let broke = 0;
 for (const [file, re, min, why] of MUST) {

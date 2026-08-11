@@ -429,7 +429,11 @@ Ui.prototype = {
   async addRoms(files, onProgress) {
     const empty = { added:0, dup:0, bad:0, big:0, failed:0, over:0,
                     stopped:false, total:0, elsewhere:0 };
-    if (pending) return empty;
+    /* ★ 확인창이 떠 있는 동안은 넣지 않습니다. 그런데 전에는 **말없이**
+         돌아섰습니다. 12개짜리 zip 을 넣는 중에 아드님이 게임 하나를 길게
+         눌러 삭제창을 띄웠다 KEEP 을 누르면, 12개가 통째로 사라진 채
+         목록도 안내칸도 그대로였습니다. 어디로 갔는지 알 방법이 없습니다. */
+    if (pending) { this.warn("FINISH THE QUESTION FIRST"); return empty; }
     const all = Array.from(files || []);
     const cand = all.filter(f => f && ROM_EXT.test(f.name || ""));
     const over = Math.max(0, cand.length - MAX_IMPORT);
@@ -437,6 +441,12 @@ Ui.prototype = {
 
     let added = 0, dup = 0, bad = 0, big = 0, failed = 0, streak = 0,
         stopped = false, elsewhere = 0;
+    /* ★ 실패를 **읽기 실패와 저장 실패로 나눠서** 셉니다.
+         전에는 3연속으로 실패해야만 "STORAGE FULL?" 이 떴습니다.
+         그래서 게임 하나짜리 zip 을 용량이 꽉 찬 폰에 넣으면
+         "ADDED 0 / 1 FAILED" 만 뜨고 **용량 이야기가 안 나왔습니다.**
+         아드님은 zip 이 잘못된 줄 알고 다시 받으러 갑니다. */
+    let failSave = 0, failRead = 0;
     /* ★ 넣는 도중에 아드님이 시스템을 바꿀 수 있습니다. 그때 "다른 데로 간
          개수" 가 도중에 뜻이 바뀌면 숫자가 거짓말이 됩니다. 시작할 때의
          목록을 기준으로 셉니다. */
@@ -463,7 +473,7 @@ Ui.prototype = {
       if (f.size > MAX_ANY_BYTES) { big++; streak = 0; continue; }
       let bytes = null;
       try { bytes = await this.d.readFile(f); }
-      catch (e) { failed++; streak++; if (streak >= GIVE_UP_AFTER) { stopped = "READ"; break; } continue; }
+      catch (e) { failed++; failRead++; streak++; if (streak >= GIVE_UP_AFTER) { stopped = "READ"; break; } continue; }
 
       const sys = this.d.detectSystem(bytes, f.name);
       if (!sys) { bad++; streak = 0; continue; }
@@ -479,7 +489,7 @@ Ui.prototype = {
         }
       } catch (e) {
         /* 저장 공간이 찼을 때가 대부분입니다. 계속 해봐야 다 실패합니다. */
-        failed++; streak++;
+        failed++; failSave++; streak++;
         if (streak >= GIVE_UP_AFTER) { stopped = "SAVE"; break; }
       }
     }
@@ -489,7 +499,11 @@ Ui.prototype = {
     /* ★ 왜 그만뒀는지를 나눠서 씁니다.
          전에는 못 읽은 것도 "저장공간이 찼다" 고 나왔습니다. 정반대 진단입니다. */
     if (stopped === "SAVE") parts.push("STOPPED — STORAGE FULL?");
-    if (stopped === "READ") parts.push("STOPPED — CANNOT READ FILES");
+    else if (stopped === "READ") parts.push("STOPPED — CANNOT READ FILES");
+    /* ★ 3연속까지 못 갔어도 **이유는 말해줘야** 합니다. 게임이 한두 개뿐인
+         zip 은 아무리 실패해도 연속 3회가 안 나옵니다. */
+    else if (failSave) parts.push("STORAGE FULL?");
+    else if (failRead) parts.push("CANNOT READ FILES");
     parts.push("ADDED " + added);
     /* ★ 중간에 그만뒀으면 **몇 개를 아예 시도조차 안 했는지** 말해줘야 합니다.
          300개를 골랐는데 52번째에서 멈추고 "ADDED 49" 만 뜨면,

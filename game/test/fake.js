@@ -24,7 +24,13 @@ function makeDom(){
   global.indexedDB = undefined;
   return { listeners, rafs, timers, audio,
            fire:(t,ev)=>(listeners[t]||[]).forEach(f=>f(ev||{})),
-           tick:(ms)=>{ const fs=[...rafs.entries()]; rafs.clear(); fs.forEach(([id,f])=>f(ms)); return fs.length; } };
+           tick:(ms)=>{ const fs=[...rafs.entries()]; rafs.clear(); fs.forEach(([id,f])=>f(ms)); return fs.length; },
+           /* ★ 예전에는 인터벌 콜백을 **저장만 하고 아무도 안 불렀습니다.**
+                그래서 3초마다 도는 자동저장이 검사에서 한 줄도 안 돌았습니다.
+                이제 검사가 직접 터뜨릴 수 있습니다. */
+           tickTimers:(n=1)=>{ let ran=0;
+             for(let k=0;k<n;k++) for(const f of [...timers.values()]) { try{ f(); }catch(e){} ran++; }
+             return ran; } };
 }
 
 /* ── 가짜 binjgb ───────────────────────────────────────────────────── */
@@ -39,7 +45,8 @@ function makeModule(opt={}){
   const m = {
     HEAP8: { buffer: HEAP },
     _malloc: n => { const p=alloc(n); alive.add("mem"+p); return p; },
-    _free: p => { alive.delete("mem"+p); rec("free"); },
+    /* _free 는 어느 쪽 껍데기든 돌려줍니다 (진짜와 같게) */
+    _free: p => { alive.delete("mem"+p); alive.delete("fd"+p); rec("free"); },
     /* ★ 진짜 binjgb 는 emulator_delete 가 롬 메모리까지 반납합니다.
          그래서 여기서도 롬을 같이 지웁니다.
          (이걸 안 맞춰두면 "롬을 따로 free 해야 한다"는 잘못된 코드가 통과합니다) */
@@ -62,11 +69,39 @@ function makeModule(opt={}){
     _emulator_get_ticks_f64: () => ticks,
     _emulator_run_until_f64: (e,u) => { ticks = u; return 1|4; },
     _emulator_was_ext_ram_updated: () => { const d=sramDirty; sramDirty=false; return d?1:0; },
-    _ext_ram_file_data_new: () => { const p=alloc(32); fdSize.set(p,32); return p; },
-    _state_file_data_new:   () => { const p=alloc(64); fdSize.set(p,64); return p; },
-    _get_file_data_ptr: p => p,
+    /* ★★★ 여기가 이 프로젝트 최악의 버그가 살던 자리입니다. ★★★
+
+       진짜 binjgb 의 FileData 는 **두 조각**입니다.
+         · 껍데기 16바이트 (포인터와 크기를 담은 구조체)
+         · 그 안에 든 자료 (세이브는 32KB, 스테이트는 195KB)
+
+       `_file_data_delete(ptr)` 는 **속에 든 자료만** 돌려줍니다.
+       껍데기는 그대로 남습니다. 그래서 `_free(ptr)` 를 따로 불러야 합니다.
+       안 부르면 한 번 저장할 때마다 껍데기가 쌓이고, 그 껍데기가 돌려준
+       195KB 자리를 가로막아 못 쓰게 만듭니다.
+       **실제로 저장 71번째에 에뮬레이터가 영구히 멈췄습니다.**
+
+       ★ 그런데 예전 가짜는 이 둘을 구분하지 않았습니다.
+         alive 에 아무것도 안 넣어서, `_free` 를 통째로 빼도 검사가
+         전부 통과했습니다. 방해검사로 이걸 잡았습니다(2026-08-11).
+         이제 껍데기를 alive 로 추적합니다 — 진짜와 같은 규약으로. */
+    _ext_ram_file_data_new: () => { const p=alloc(32); fdSize.set(p,32);
+                                    alive.add("fd"+p); return p; },
+    _state_file_data_new:   () => { const p=alloc(64); fdSize.set(p,64);
+                                    alive.add("fd"+p); return p; },
+    /* ★★★ 껍데기와 속은 **다른 주소**입니다. ★★★
+         진짜 binjgb 에서 `_get_file_data_ptr(ptr)` 는 껍데기 안에 든
+         **자료의 주소**를 돌려줍니다. 껍데기 주소(ptr)와 다릅니다.
+         예전 가짜는 둘을 같은 값으로 줬습니다. 그래서
+         `_free(_get_file_data_ptr(ptr))` 처럼 **엉뚱한 주소를 반납하는**
+         코드를 써도 검사가 전부 통과했습니다.
+         (진짜로 그러면 wasm 이 OOM 으로 죽습니다 — live.js 로 확인했습니다.)
+         이 프로젝트가 제일 비싸게 배운 버그가 바로 이 혼동입니다.
+         2026-08-11 교차검사에서 잡아 진짜와 같게 고쳤습니다.            */
+    _get_file_data_ptr: p => p + 16,
     _get_file_data_size: p => fdSize.get(p) || 0,
-    _file_data_delete: () => rec("filedata.delete"),
+    /* 속만 비웁니다. 껍데기(alive 의 "fd"+p)는 _free 가 와야 사라집니다. */
+    _file_data_delete: p => { fdSize.delete(p); rec("filedata.delete"); },
     _emulator_write_ext_ram: () => rec("sram.write"),
     _emulator_read_ext_ram:  () => rec("sram.read"),
     _emulator_write_state:   () => rec("state.write"),

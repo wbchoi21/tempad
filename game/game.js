@@ -147,7 +147,27 @@ function tx(db, mode, fn) {
      제목에 빈칸이 두 개 이상 연달아 나오는 경우는 없으니 거기서 자릅니다.
    · 제목을 아예 안 넣은 롬도 있습니다 (WORDLE.gb).
      그때는 파일 이름을 씁니다. "UNTITLED" 보다 낫습니다.              */
+/* ★ GBA 는 제목이 **다른 자리**에 있습니다 — 0xA0~0xAB (12글자).
+     게임보이 자리(0x134)를 읽으면 쓰레기가 나옵니다. 그런데 그 쓰레기가
+     빈 문자열이 아니라서 "파일 이름으로 대신하기" 도 안 걸리고,
+     목록에 따옴표 한 글자짜리 게임이 떴습니다.
+     (2026-08-11 교차검사에서 잡았습니다.)                               */
+function gbaTitle(bytes, fileName) {
+  let s = "";
+  for (let i = 0xA0; i <= 0xAB && i < bytes.length; i++) {
+    const c = bytes[i];
+    if (c === 0) break;
+    s += (c >= 32 && c < 127) ? String.fromCharCode(c) : " ";
+  }
+  s = s.trim();
+  if (s) return s;
+  if (fileName) return String(fileName).replace(/\.[^.]*$/, "").trim().toUpperCase();
+  return "UNTITLED";
+}
+
 function romTitle(bytes, fileName) {
+  /* 어느 기기 것인지에 따라 제목이 있는 자리가 다릅니다 */
+  if (!looksLikeGb(bytes) && looksLikeGba(bytes)) return gbaTitle(bytes, fileName);
   const cgb = bytes[0x143];
   const end = (cgb === 0x80 || cgb === 0xC0) ? 0x13E : 0x142;
   let s = "";
@@ -186,6 +206,73 @@ function looksLikeGb(bytes) {
   return true;
 }
 
+/* ── GBA 롬인지 보기 ──────────────────────────────────────────────────
+   GBA 헤더(0x00~0xBF)에도 고정된 자리가 있습니다.
+     0x04~0x9F  닌텐도 로고 156바이트 (실제 기기 BIOS 가 이걸 검사합니다)
+     0xB2       반드시 0x96 — "고정값(fixed value)" 이라고 규격에 적혀 있습니다
+     0xBD       헤더 체크섬
+
+   ★★ 처음에는 0xB2 의 0x96 **하나만** 봤습니다. 그건 너무 헐렁했습니다.
+      256분의 1 확률로 아무 파일이나 GBA 게임으로 등록됐습니다.
+      실제로 사진 파일 하나가 "PHOTO" 라는 이름의 GBA 게임이 됐습니다.
+      (2026-08-11 교차검사에서 재현해서 잡았습니다.)
+
+   ★ 그래서 셋을 봅니다 — 길이 · 0xB2 의 0x96 · 그리고 **로고나 체크섬**.
+     로고 156바이트는 진짜 GBA 롬(jsmolka/gba-tests, MIT)에서 직접 떠온
+     것이고, 체크섬 공식도 그 롬 두 개로 맞는 것을 확인했습니다.
+     둘 중 하나만 맞아도 통과시킵니다 — 홈브루 중에 체크섬을 안 맞춘 것이
+     있어서 그것까지 거부할 이유는 없습니다(에뮬레이터에서는 잘 돕니다).   */
+const GBA_FIXED_AT = 0xB2, GBA_FIXED = 0x96;
+/* 0x04~0x9F 에 들어가는 닌텐도 로고. 진짜 기기 BIOS 가 이걸 검사합니다.
+   앞 32바이트만 봐도 충분합니다 (우연히 맞을 확률이 사실상 0). */
+const GBA_LOGO_HEAD = [
+  0x24,0xFF,0xAE,0x51,0x69,0x9A,0xA2,0x21,0x3D,0x84,0x82,0x0A,0x84,0xE4,0x09,0xAD,
+  0x11,0x24,0x8B,0x98,0xC0,0x81,0x7F,0x21,0xA3,0x52,0xBE,0x19,0x93,0x09,0xCE,0x20,
+];
+
+function gbaHeaderChecksum(bytes) {
+  let c = 0;
+  for (let i = 0xA0; i <= 0xBC; i++) c = (c - bytes[i]) & 0xFF;
+  return (c - 0x19) & 0xFF;
+}
+function gbaChecksumOk(bytes) {
+  if (!bytes || bytes.length < 0xC0) return false;
+  return gbaHeaderChecksum(bytes) === bytes[0xBD];
+}
+function gbaLogoOk(bytes) {
+  if (!bytes || bytes.length < 0xC0) return false;
+  for (let i = 0; i < GBA_LOGO_HEAD.length; i++)
+    if (bytes[0x04 + i] !== GBA_LOGO_HEAD[i]) return false;
+  return true;
+}
+function looksLikeGba(bytes) {
+  if (!bytes || bytes.length < 0xC0) return false;
+  if (bytes[GBA_FIXED_AT] !== GBA_FIXED) return false;
+  return gbaLogoOk(bytes) || gbaChecksumOk(bytes);
+}
+
+/* ── 어느 기기의 롬인가 ────────────────────────────────────────────────
+   ★ 파일 이름이 아니라 **롬 안을 보고** 정합니다.
+     확장자는 마음대로 바꿀 수 있습니다. `.gb` 라고 적힌 GBC 게임,
+     `.gbc` 라고 적힌 흑백 게임이 흔합니다.
+
+   ★ 게임보이 먼저 봅니다. 게임보이 로고(16바이트)가 훨씬 까다로운
+     검사라, 이걸 통과하면 GBA 일 리가 없습니다.
+
+   0x143 은 컬러 표시입니다.
+     0x80  컬러 기능이 있지만 흑백 게임보이에서도 돌아감 (포켓몬 금·은 등)
+     0xC0  컬러 전용
+   둘 다 **GAME BOY COLOR 목록**으로 보냅니다. 상자에 그렇게 적혀 있고,
+   아드님이 찾을 때도 그렇게 찾습니다.                                  */
+function detectSystem(bytes) {
+  if (looksLikeGb(bytes)) {
+    const flag = bytes[0x143];
+    return (flag === 0x80 || flag === 0xC0) ? "gbc" : "gb";
+  }
+  if (looksLikeGba(bytes)) return "gba";
+  return null;
+}
+
 /* 한 개씩 훑으면서 **목록에 필요한 것만** 뽑아옵니다.
    롬 내용(수 MB)은 뽑은 즉시 버려지므로 메모리에 쌓이지 않습니다. */
 function listByCursor(db) {
@@ -206,6 +293,9 @@ function listByCursor(db) {
       const v = c.value || {};
       /* ★ 여기서 필요한 것만 베껴 담습니다. v(롬 포함)는 곧 버려집니다. */
       out.push({ id:v.id, title:v.title, file:v.file, fromBundled:v.fromBundled || null,
+                 /* ★ 옛 기록에는 system 이 없습니다. 그때는 게임보이뿐이었으니 gb 입니다.
+                      이 한 줄이 판올림 이행(migration) 전부입니다.       */
+                 system: v.system || "gb",
                  size:v.size, sram:!!v.sram,
                  states:(v.states || [null,null,null]).map(x => !!x),
                  added:v.added, played:v.played });
@@ -223,40 +313,73 @@ const RomStore = {
      이라고 표시해 둡니다. 목록에서 기본 게임과 짝을 맞출 때 씁니다.
      ★ 파일 이름으로 짝을 맞추면 안 됩니다 — 같은 이름의 남의 롬이
        기본 게임을 목록에서 밀어냅니다. */
-  async add(bytes, fileName, extra) {
-    /* ★ 아래 모든 함수는 실패해도 반드시 연결을 닫습니다 (finally).
-         전에는 성공했을 때만 닫아서, 저장이 실패할 때마다 연결이 쌓였습니다. */
+  /* ★★ 읽고-고치고-쓰기를 **하나의 트랜잭션 안에서** 합니다. ★★
+
+     전에는 읽기(readonly get)와 쓰기(readwrite put)가 서로 다른 트랜잭션
+     이었습니다. 그 사이가 무방비라, 기본 게임에 슬롯 저장을 누른 그 순간
+     (여기서 add 를 부릅니다) 게임이 배터리 세이브를 하면
+     **나중에 쓴 배터리 세이브가 조용히 사라졌습니다.**
+     patch() 는 이미 한 트랜잭션으로 고쳐놨는데 add() 만 빠져 있었습니다.
+     (2026-08-11 교차검사에서 재현해서 잡았습니다.)                      */
+  add(bytes, fileName, extra) {
     const id = romKey(bytes);
-    const rec = {
+    const base = {
       id, title: romTitle(bytes, fileName), file: fileName || "",
       size: bytes.length, rom: bytes,
       sram: null, states: [null, null, null],
       added: Date.now(), played: 0,
       fromBundled: (extra && extra.fromBundled) || null,
+      /* ★ 어느 기기 것인지. 안 넘어오면 롬을 직접 보고 정합니다 —
+           넣는 쪽이 깜박해도 목록에서 사라지지 않게. */
+      system: (extra && extra.system) || detectSystem(bytes) || "gb",
     };
-    const db = await openDB();
-    try {
-    const cur = await tx(db, "readonly", s => s.get(id));
-    /* ★ 이미 있으면 저장해둔 것들을 반드시 지킵니다.
-         전에는 이 검사가 항상 거짓이라, 같은 롬을 다시 넣거나
-         게임이 배터리 세이브를 하는 순간 슬롯 저장이 통째로 날아갔습니다. */
-    if (cur && cur.id) {
-      rec.sram   = cur.sram;
-      rec.states = cur.states || rec.states;
-      rec.added  = cur.added;
-      rec.played = cur.played || 0;
-      /* ★ 파일 이름과 제목도 처음 것을 지킵니다.
-           안 그러면 같은 롬을 다른 이름으로 넣었을 때 목록에 두 번 뜨고,
-           기본 게임에 저장을 하는 순간 이름이 바뀌어 버립니다
-           ("TOBU TOBU GIRL" → "TOBU"). */
-      rec.file   = cur.file || rec.file;
-      rec.title  = cur.title || rec.title;
-      /* 기본 게임 표시도 지웁니다 — 한 번 붙으면 계속 붙어 있어야 합니다 */
-      rec.fromBundled = cur.fromBundled || rec.fromBundled;
-    }
-    await tx(db, "readwrite", s => s.put(rec));
-    return rec;
-    } finally { db.close(); }
+    return openDB().then(db => new Promise((ok, no) => {
+      let out = null, why = null, t;
+      /* ★ transaction() 이 그 자리에서 던질 수 있습니다 (다른 탭이 판올림해서
+           연결이 이미 닫힌 경우). 그때 연결을 안 닫으면 그 뒤 판올림이
+           영영 막힙니다. list/get/remove 는 finally 로 닫는데 여기만
+           빠져 있었습니다. (2026-08-11 교차검사에서 지적) */
+      try { t = db.transaction(STORE, "readwrite"); }
+      catch (e) { try { db.close(); } catch (x) {} no(e); return; }
+      const st = t.objectStore(STORE);
+      const g = st.get(id);
+      g.onerror = ev => { why = (ev && ev.target && ev.target.error) || why; };
+      g.onsuccess = () => {
+        const cur = g.result;
+        const rec = Object.assign({}, base);
+        /* ★ 이미 있으면 저장해둔 것들을 반드시 지킵니다.
+             전에는 이 검사가 항상 거짓이라, 같은 롬을 다시 넣거나
+             게임이 배터리 세이브를 하는 순간 슬롯 저장이 통째로 날아갔습니다. */
+        if (cur && cur.id) {
+          rec.sram   = cur.sram;
+          rec.states = cur.states || rec.states;
+          rec.added  = cur.added;
+          rec.played = cur.played || 0;
+          /* ★ 파일 이름과 제목도 처음 것을 지킵니다.
+               안 그러면 같은 롬을 다른 이름으로 넣었을 때 목록에 두 번 뜨고,
+               기본 게임에 저장을 하는 순간 이름이 바뀌어 버립니다
+               ("TOBU TOBU GIRL" → "TOBU"). */
+          rec.file   = cur.file || rec.file;
+          rec.title  = cur.title || rec.title;
+          /* 기본 게임 표시도 지웁니다 — 한 번 붙으면 계속 붙어 있어야 합니다 */
+          rec.fromBundled = cur.fromBundled || rec.fromBundled;
+          /* ★★ 어느 기기 것인지도 처음 것을 지킵니다. ★★
+               안 그러면 같은 롬을 다시 넣는 순간 기록이 **다른 목록으로
+               옮겨가고**, 슬롯 세이브가 "다른 기기의 것" 이라며 영영
+               안 읽힙니다. 판별 규칙을 나중에 고쳐도 있던 기록은 안 움직입니다.
+             ★ 옛 기록에는 system 칸이 아예 없습니다. 그때는 게임보이만
+               있었으니 "gb" 로 봅니다 — 목록(list)이 쓰는 규칙과 같습니다.
+               이걸 안 하면 v1 때 넣은 게임이 다시 넣는 순간 딴 목록으로
+               사라집니다. (2026-08-11 교차검사에서 잡았습니다.) */
+          rec.system = cur.system || "gb";
+        }
+        out = rec;
+        const w = st.put(rec);
+        w.onerror = ev => { why = (ev && ev.target && ev.target.error) || why; };
+      };
+      t.oncomplete = () => { db.close(); ok(out); };
+      t.onerror = t.onabort = () => { db.close(); no(why || t.error || new Error("db-error")); };
+    }));
   },
   async list() {
     const db = await openDB();
@@ -281,6 +404,7 @@ const RomStore = {
       try {
         out.push({ id:r.id, title:r.title || "UNTITLED", file:r.file || "",
                    fromBundled: r.fromBundled || null,
+                   system: r.system || "gb",      /* 옛 기록은 전부 게임보이 */
                    size:r.size || 0, hasSram: !!r.sram,
                    states: (r.states || [null,null,null]).map(x => !!x),
                    added:r.added || 0, played:r.played || 0 });
@@ -292,7 +416,21 @@ const RomStore = {
     const db = await openDB();
     try {
       const r = await tx(db, "readonly", s => s.get(id));
-      return r || null;
+      if (!r) return null;
+      /* ★ 옛 기록에는 system 이 없습니다. list() 는 이걸 채워주는데
+           get() 은 안 채워줬습니다. 그래서 옛 게임을 켜면 playing.system 이
+           undefined 가 되고, 슬롯에 저장할 때 **그 순간 보고 있던 목록의**
+           시스템이 찍혀서, 나중에 "다른 기기의 세이브" 라며 영영 안 읽혔습니다.
+           (2026-08-11 교차검사에서 재현해서 잡았습니다.)
+
+         ★★ 채우는 값은 **반드시 "gb"** 입니다. 롬을 다시 판별하면 안 됩니다.
+            v1 에는 게임보이 목록 하나뿐이었으니, 옛 기록은 전부 거기에
+            있었습니다. 여기서 롬을 새로 판별하면 컬러 겸용 게임이
+            **갑자기 다른 목록으로 옮겨가고 세이브도 안 읽힙니다.**
+            list() 가 쓰는 규칙(`r.system || "gb"`)과 반드시 같아야 합니다.
+            (처음에 detectSystem 으로 채웠다가 검사에서 걸렸습니다.) */
+      if (!r.system) r.system = "gb";
+      return r;
     } finally { db.close(); }
   },
   /* ★★ 읽고-고치고-쓰기를 **하나의 트랜잭션 안에서** 합니다. ★★
@@ -306,8 +444,9 @@ const RomStore = {
      중간에 실패하면 되돌려집니다.                                      */
   patch(id, changes) {
     return openDB().then(db => new Promise((ok, no) => {
-      let out = null, why = null;
-      const t = db.transaction(STORE, "readwrite");
+      let out = null, why = null, t;
+      try { t = db.transaction(STORE, "readwrite"); }
+      catch (e) { try { db.close(); } catch (x) {} no(e); return; }
       const st = t.objectStore(STORE);
       const g = st.get(id);
       g.onerror = ev => { why = ev && ev.target && ev.target.error; };
@@ -318,6 +457,38 @@ const RomStore = {
         out = rec;
         const w = st.put(rec);
         w.onerror = ev => { why = ev && ev.target && ev.target.error; };
+      };
+      t.oncomplete = () => { db.close(); ok(out); };
+      t.onerror = t.onabort = () => { db.close(); no(why || t.error || new Error("db-error")); };
+    }));
+  },
+  /* ★★★ 슬롯 한 칸만 **한 트랜잭션 안에서** 바꿉니다. ★★★
+
+     예전에는 화면 쪽(ui.saveSlot)이 이렇게 했습니다 —
+       get(id) 로 읽고 → states 사본을 만들고 → patch(id,{states}) 로 쓰기.
+     읽기와 쓰기가 서로 다른 트랜잭션이라, **SLOT 1 에 저장하고 곧바로
+     SLOT 2 에 저장하면 둘 중 하나가 조용히 사라졌습니다.**
+     (둘 다 "SAVED" 라고 말해놓고서요.)
+     add·patch 는 이미 한 트랜잭션으로 고쳐놨는데 이 길만 빠져 있었습니다.
+     2026-08-11 교차검사에서 재현해서 잡았습니다.                        */
+  putSlot(id, n, value) {
+    return openDB().then(db => new Promise((ok, no) => {
+      let out = false, why = null, t;
+      const bail = e => { try { db.close(); } catch (x) {} no(e); };
+      try { t = db.transaction(STORE, "readwrite"); }
+      catch (e) { bail(e); return; }
+      const st = t.objectStore(STORE);
+      const g = st.get(id);
+      g.onerror = ev => { why = (ev && ev.target && ev.target.error) || why; };
+      g.onsuccess = () => {
+        const rec = g.result;
+        if (!rec || !rec.id) return;               /* 없으면 아무것도 안 씁니다 */
+        const states = (rec.states || [null, null, null]).slice();
+        states[n] = value;
+        rec.states = states;
+        out = true;
+        const w = st.put(rec);
+        w.onerror = ev => { why = (ev && ev.target && ev.target.error) || why; };
       };
       t.oncomplete = () => { db.close(); ok(out); };
       t.onerror = t.onabort = () => { db.close(); no(why || t.error || new Error("db-error")); };
@@ -378,6 +549,11 @@ class Session {
     /* 롬을 wasm 메모리로 복사 (32KB 단위로 맞춤 — demo.js 와 같음) */
     const size = (romBytes.byteLength + 0x7fff) & ~0x7fff;
     this.romDataPtr = module._malloc(size);
+    /* ★ 자리를 못 잡았으면 여기서 멈춰야 합니다.
+         0 을 그대로 쓰면 **wasm 메모리 0번지부터 롬을 덮어써서** 에뮬레이터가
+         통째로 망가집니다. 그러면 그 뒤로는 무엇을 해도 안 됩니다.
+         binjgb 는 메모리를 늘릴 수 없게 지어져 있어서 실제로 일어날 수 있습니다. */
+    if (!this.romDataPtr) { this.romDataPtr = 0; throw new Error("BAD ROM"); }
     wasmBuf(module, this.romDataPtr, size).fill(0).set(romBytes);
 
     this.e = module._emulator_new_simple(
@@ -408,6 +584,8 @@ class Session {
     }
     this.audioStartSec = 0;
     this.volume = this.opts.volume === undefined ? 0.4 : this.opts.volume;
+    /* 화면 색 (false = 템패드 주황, true = 게임 본래 색) */
+    this.colorReal = !!this.opts.colorReal;
   }
 
   /* ── 버튼 ────────────────────────────────────────────────────────── */
@@ -441,7 +619,7 @@ class Session {
         else break;
       }
     }
-    /* 게임이 스스로 저장했으면 표시만 해둡니다. 실제 저장은 1초마다 한 번. */
+    /* 게임이 스스로 저장했으면 표시만 해둡니다. 실제 저장은 3초마다 한 번. */
     if (m._emulator_was_ext_ram_updated(this.e)) this.sramDirty = true;
   }
 
@@ -463,11 +641,24 @@ class Session {
     this.audioStartSec += AUDIO_FRAMES / ctx.sampleRate;
   }
 
+  /* ★ v2 — 화면 색을 두 가지로 낼 수 있습니다.
+       colorReal 이 거짓이면 템패드 주황 4단계 (기본, 기기 감성)
+       참이면 에뮬레이터가 낸 색 그대로 (게임 본래의 색)
+     둘 다 **게임 화면 안쪽만** 바뀝니다. 틀(UI)은 언제나 주황·검정입니다. */
   paint() {
     if (!this.ctx2d) return;
-    tintOrange(this.imageData.data);          /* ★ 주황으로 */
+    if (!this.colorReal) tintOrange(this.imageData.data);
+    else {
+      /* ★ 투명도를 못 박습니다. createImageData 는 전부 투명(0)으로
+           시작하는데, 에뮬레이터가 알파를 안 채우는 판이 있으면
+           화면이 통째로 안 보입니다. (주황 쪽은 tintOrange 가 합니다.) */
+      const d = this.imageData.data;
+      for (let i = 3; i < d.length; i += 4) d[i] = 255;
+    }
     this.ctx2d.putImageData(this.imageData, 0, 0);
   }
+
+  setColorMode(real) { this.colorReal = !!real; }
 
   /* ── 한 프레임 ────────────────────────────────────────────────────── */
   frame(startMs) {
@@ -506,12 +697,17 @@ class Session {
     this.sramTimer = setInterval(() => this.flushSram(), 3000);
   }
 
-  pause() {
+  /* byUser 가 참이면 "아드님이 일부러 멈춘 것"(메뉴를 연 것)입니다.
+     ★ 이걸 구분해야 합니다. 안 구분하면, 메뉴를 열어둔 채 폰을 껐다 켰을 때
+       "돌아왔으니 다시 돌리자" 가 발동해서 **메뉴가 떠 있는데 게임이 뒤에서
+       돌고 소리까지 납니다.** (2026-08-11 교차검사에서 재현해서 잡았습니다.) */
+  pause(byUser) {
+    if (byUser) this.userPaused = true;
     if (this.dead || this.raf === null) return;
     cancelAnimationFrame(this.raf);
     this.raf = null;
     /* ★ 멈추면 자동저장 타이머도 끕니다.
-         안 그러면 다른 앱에 가 있는 동안에도 1초마다 깨어납니다. */
+         안 그러면 다른 앱에 가 있는 동안에도 3초마다 깨어납니다. */
     if (this.sramTimer) { clearInterval(this.sramTimer); this.sramTimer = 0; }
     const ctx = getAudioCtx();
     if (ctx && ctx.suspend) ctx.suspend();
@@ -519,6 +715,7 @@ class Session {
   }
 
   resume() {
+    this.userPaused = false;
     if (this.dead || this.raf !== null) return;
     const ctx = getAudioCtx();
     if (ctx && ctx.resume) ctx.resume();
@@ -594,9 +791,19 @@ class Session {
       const bytes = buf.slice();
       m._file_data_delete(ptr);
     m._free(ptr);            /* ★ 껍데기까지 반납 */
-      if (this.opts.onSram) this.opts.onSram(bytes);
+      /* ★★ 저장이 실패하면 **다시 시도해야 합니다.** ★★
+           위에서 sramDirty 를 미리 껐기 때문에, 실패를 그냥 흘리면
+           그 저장은 영영 사라집니다. 저장공간이 찼을 때 실제로 그랬습니다 —
+           아이가 게임 안에서 "리포트" 를 썼는데 아무 말도 없이 날아갑니다.
+           실패하면 표시를 되살려서 3초 뒤에 다시 해봅니다.
+           (2026-08-11 교차검사에서 잡았습니다.) */
+      if (this.opts.onSram) {
+        const p = this.opts.onSram(bytes);
+        if (p && typeof p.catch === "function")
+          p.catch(() => { if (!this.dead) this.sramDirty = true; });
+      }
       return true;
-    } catch (err) { return false; }
+    } catch (err) { this.sramDirty = true; return false; }
   }
 
   /* ── 정리 ─────────────────────────────────────────────────────────────
@@ -654,28 +861,42 @@ class Session {
    ========================================================================== */
 
 function pauseForBackground() {
-  if (session && session.running) session.pause();     /* pause 안에서 저장까지 함 */
+  if (session && session.running) session.pause(false); /* pause 안에서 저장까지 함 */
 }
 
 let onGone = null;           /* 세션이 사라졌다고 화면에 알려줄 곳 */
 
-function hardStop() {
+/* quiet 가 참이면 "우리가 일부러 껐다" 는 뜻입니다.
+   ★ 이걸 구분해야 합니다. 안 구분하면 평범하게 CHANGE GAME 을 눌렀을 뿐인데
+     화면에 **"GAME STOPPED"** 라는 사고 안내가 뜨고, quit() 이 두 번 돕니다.
+     (2026-08-11 교차검사에서 재현해서 잡았습니다.) */
+function stopSession(quiet) {
   epoch++;                     /* ★ 먼저 세대를 올립니다 */
   if (!session) return;
   const s = session;
   session = null;            /* ★ 먼저 끊습니다. 그래야 남은 프레임이 스스로 멈춥니다 */
   try { s.destroy(); } catch (e) {}
+  if (quiet) return;
   /* ★ 화면은 아직 "게임 중" 이라고 믿고 있습니다.
        알려주지 않으면 멈춘 화면에 갇힙니다 (RESUME 도 안 먹습니다). */
   try { if (onGone) onGone(); } catch (e) {}
 }
+/* 사고로 사라진 것 (페이지를 떠남·얼어붙음) — 화면에 알려야 합니다.
+   ★ 이벤트 손으로 직접 걸리므로 인자를 받지 않는 껍데기가 필요합니다
+     (이벤트 객체가 quiet 자리에 들어가면 안 됩니다). */
+function hardStop() { stopSession(false); }
+/* 우리가 일부러 끈 것 (목록으로 나가기 등) — 조용히 */
+function stopQuiet() { stopSession(true); }
 
 function onVisibility() {
   if (typeof document === "undefined") return;
   if (document.visibilityState === "hidden") { pauseForBackground(); return; }
   /* ★ 돌아왔으면 다시 돌립니다.
-       전에는 멈춘 채로 있어서 "화면은 게임인데 아무 반응이 없는" 상태가 됐습니다. */
-  if (session && !session.dead && !session.running) session.resume();
+       전에는 멈춘 채로 있어서 "화면은 게임인데 아무 반응이 없는" 상태가 됐습니다.
+     ★★ 단, **아드님이 일부러 멈춘 것(메뉴)** 은 그대로 둡니다.
+        안 그러면 메뉴가 떠 있는데 뒤에서 게임이 돌고 소리가 납니다. */
+  if (session && !session.dead && !session.running && !session.userPaused)
+    session.resume();
 }
 
 function installGuards() {
@@ -704,8 +925,20 @@ function installGuards() {
    5. 바깥에서 쓰는 것
    ========================================================================== */
 
+/* ── 시스템마다 다른 에뮬레이터 ────────────────────────────────────────
+   게임보이·게임보이 컬러는 binjgb 한 개가 둘 다 봅니다 (롬 헤더를 보고
+   스스로 컬러 모드로 갑니다). GBA 는 아예 다른 기계라 다른 코어가 필요합니다.
+
+   ★ GBA 코어는 **따로 등록**하게 해뒀습니다 (game/mgba.js 가 registerCore
+     를 부릅니다). 그래야 GBA 파일이 없어도 게임보이는 멀쩡히 돌아가고,
+     GBA 를 고르면 "코어가 없다"고 이유가 뜹니다. 검은 화면보다 낫습니다. */
+const SESSIONS = { gb: Session, gbc: Session, gba: null };
+function registerCore(system, SessionClass) { SESSIONS[system] = SessionClass; }
+
 const GameMode = {
-  RomStore, readFile, romTitle, romKey, tintOrange, looksLikeGb,
+  RomStore, readFile, romTitle, romKey, tintOrange,
+  looksLikeGb, looksLikeGba, gbaChecksumOk, gbaHeaderChecksum, detectSystem,
+  registerCore,
 
   /* 게임 시작. ★ 무조건 앞의 게임을 먼저 정리합니다.
      이걸 안 하면 두 게임이 겹쳐 돌면서 소리가 두 겹으로 납니다. */
@@ -716,15 +949,23 @@ const GameMode = {
     /* ★ 읽는 사이에 나갔으면 아예 시작하지 않습니다 */
     if (born !== undefined && born !== epoch) return null;
     if (typeof document !== "undefined" && document.visibilityState === "hidden") return null;
-    hardStop();
-    const s = new Session(module, romBytes, opts);
+    /* 어느 기계의 게임인가에 따라 에뮬레이터가 달라집니다 */
+    const sys = (opts && opts.system) || "gb";
+    const Klass = SESSIONS[sys];
+    if (!Klass) throw new Error("NO CORE");
+    /* ★ 새 게임을 켜는 건 가장 명백하게 "일부러" 하는 일입니다.
+         여기서 사고 신호(onGone)를 내보내면 막 켠 게임 화면에
+         "GAME STOPPED" 가 뜹니다. 조용히 끕니다. */
+    stopQuiet();
+    const s = new Klass(module, romBytes, opts);
     session = s;
     if (opts && opts.sram) { try { s.loadSram(opts.sram); } catch (e) {} }
     s.start();
     return s;
   },
 
-  stop: hardStop,
+  /* 목록으로 나가기 등 **일부러** 끄는 길. 사고 안내를 띄우지 않습니다. */
+  stop: stopQuiet,
   epoch: () => epoch,
   /* ★ 아이폰은 **손가락이 닿는 그 순간(동기 실행 구간)** 에 소리 장치를
        깨워야 소리가 납니다. 우리는 게임을 시작할 때 깨우는데,
@@ -742,16 +983,27 @@ const GameMode = {
   current: () => session,
   isRunning: () => !!(session && session.running),
 
-  pause()  { if (session) session.pause(); },
+  /* 화면 쪽이 부르는 pause 는 언제나 "아드님이 메뉴를 열었다" 는 뜻입니다 */
+  pause()  { if (session) session.pause(true); },
   resume() { if (session) session.resume(); },
   press(name, down) { if (session) session.press(name, down); },
+
+  /* ★ 화면 색 토글. 멈춰 있을 때(메뉴가 열려 있을 때)도 바로 보이게
+       그 자리에서 한 번 다시 칠합니다. 안 그러면 RESUME 하기 전까지
+       "눌렀는데 아무 일도 안 일어나는" 버튼이 됩니다. */
+  setColorMode(real) {
+    if (!session) return false;
+    session.setColorMode(real);
+    try { session.paint(); } catch (e) {}
+    return true;
+  },
 
   saveState() { return session ? session.getState() : null; },
   loadState(bytes) { return session ? session.loadState(bytes) : false; },
   flushSram() { return session ? session.flushSram() : false; },
 
   /* 시험용 — 안전장치가 실제로 걸렸는지 확인할 때 */
-  _guards: { onVisibility, hardStop, pauseForBackground },
+  _guards: { onVisibility, hardStop, stopQuiet, pauseForBackground },
 };
 
 /* ★ 안전장치는 **파일을 불러올 때 바로** 겁니다.

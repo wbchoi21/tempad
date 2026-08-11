@@ -264,9 +264,52 @@ const GP_MAP = [
   [1, "A"],
   [8, "select"], [9, "start"],
   [12, "up"], [13, "down"], [14, "left"], [15, "right"],
-  /* L·R 은 MENU — 게임 중에 패드만으로 저장·나가기까지 되게 */
-  [4, "menu"], [5, "menu"],
+  /* ★★ v2 — 어깨 버튼은 이제 **게임 입력**입니다. ★★
+       v1 에서는 L 이나 R 을 혼자 누르면 MENU 가 열렸습니다.
+       게임보이에는 어깨 버튼이 없으니 그래도 됐습니다.
+       그런데 GBA 는 L·R 이 진짜 게임 버튼입니다 (마리오카트의 드리프트,
+       포켓몬의 단축키). 그대로 두면 **드리프트하려고 R 을 누른 순간
+       게임이 멈추고 메뉴가 뜹니다.** 그래서 게임에 넘겨줍니다.
+       (게임보이·컬러에서는 코어에 해당 버튼이 없어 그냥 무시됩니다.) */
+  [4, "L"], [5, "R"],
 ];
+
+/* ★ 대신 MENU 는 **세 개를 한꺼번에** 눌러야 열립니다 — SELECT + L + R.
+     게임하다 이 셋을 정확히 동시에 누를 일은 없습니다.
+     (SELECT+START 는 일부 게임이 "처음부터 다시" 로 쓰기 때문에 피했습니다.) */
+const MENU_COMBO = ["select", "L", "R"];
+
+/* 눌린 것들 중에 MENU 조합이 들어 있으면 그것을 **걷어내고** 알려줍니다.
+   ★ 걷어내야 합니다. 안 그러면 메뉴를 열면서 게임에도 SELECT·L·R 이
+     들어가서, 돌아왔을 때 캐릭터가 엉뚱한 짓을 하고 있습니다.
+
+   ★★ 그런데 "셋이 다 눌린 프레임" 만 걷어내면 부족합니다. ★★
+     사람은 세 버튼을 16ms 안에 동시에 못 누릅니다. SELECT → L → R 순으로
+     누르면 그 사이 프레임에서 SELECT 와 L 이 **게임으로 새어 들어갑니다.**
+     포켓몬·젤다에서 SELECT 는 실제로 하는 일이 있습니다.
+     (2026-08-11 교차검사에서 재현해서 잡았습니다.)
+
+     한때 "조합을 만드는 중"(SELECT + 어깨 버튼)도 걷어내 봤습니다.
+     ★★ 그런데 그게 더 나빴습니다. ★★
+       어깨 버튼에 손가락이 얹혀 있는 동안 **SELECT 가 통째로 죽습니다.**
+       게임보이·컬러에는 어깨 버튼이 아예 없어서 거기 손가락을 얹어두기
+       쉬운데, 그 상태에서 SELECT 를 누르면 아무 반응이 없습니다
+       (포켓몬의 아이템 교체, 젤다의 지도…). 화면에 표시도 없으니
+       "패드가 고장났다" 로 보입니다.
+
+     그래서 **셋이 다 눌린 프레임만** 걷어냅니다.
+     대신 메뉴를 여는 그 순간 게임이 SELECT 를 한 번 받을 수 있습니다.
+     하지만 바로 다음 순간 게임이 멈추므로 해가 거의 없습니다.
+       · 조용히 계속 죽는 입력  ← 나쁨
+       · 메뉴 열 때 한 번 스치는 입력  ← 견딜 만함
+     둘 중 뒤쪽을 골랐습니다. (2026-08-11 교차검사 두 번의 상반된 지적을
+     저울질한 결과입니다.)                                              */
+function gamepadResolve(held) {
+  const list = held || [];
+  const menu = MENU_COMBO.every(n => list.indexOf(n) >= 0);
+  if (!menu) return { held: list.slice(), menu: false };
+  return { held: list.filter(n => MENU_COMBO.indexOf(n) < 0), menu: true };
+}
 
 /* 지금 눌려 있는 것들을 이름으로 돌려줍니다 (정렬된 배열).
    pads 는 navigator.getGamepads() 가 준 것 그대로 넣으면 됩니다. */
@@ -298,7 +341,7 @@ function gamepadEdges(prev, now) {
   return out;
 }
 
-const PadApi = { Pad, toDir, toDirs, gamepadHeld, gamepadEdges,
-                 DEAD, ON, KEEP, DIAG, RADIUS, DIRS, GP_DEAD, GP_MAP };
+const PadApi = { Pad, toDir, toDirs, gamepadHeld, gamepadEdges, gamepadResolve,
+                 DEAD, ON, KEEP, DIAG, RADIUS, DIRS, GP_DEAD, GP_MAP, MENU_COMBO };
 if (typeof window !== "undefined") window.GamePad4 = PadApi;
 if (typeof module !== "undefined" && module.exports) module.exports = PadApi;

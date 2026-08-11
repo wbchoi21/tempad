@@ -5,16 +5,32 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>TVA FIELD UNIT</title>
 <!-- ============================================================================
-     TVA FIELD UNIT — 게임 모드
+     TVA FIELD UNIT — 게임 모드  (v2)
 
-     게임보이 에뮬레이터는 binjgb (MIT, Copyright 2017 Ben Smith)
+     게임보이·컬러 에뮬레이터는 binjgb (MIT, Copyright 2017 Ben Smith)
      https://github.com/binji/binjgb
 
      [ 파일 구실 ]
        game.js  에뮬레이터 + 롬 보관 + 비정상 종료 방어
        ui.js    화면 흐름 (시스템 고르기 → 목록 → 플레이 → 메뉴)
-       pad.js   터치 십자키
+       pad.js   터치 십자키 + 블루투스 게임패드
+       mgba.js  GBA 코어 (있을 때만. 없으면 GBA 만 못 씁니다)
        이 파일  화면 그리기와 크기 맞추기
+
+     ★★ v2 에서 달라진 것 ★★
+       1. 시스템 셋 — GAME BOY / GAME BOY COLOR / GAME BOY ADVANCE
+          (게임&워치는 없앴습니다. 만들 것이 하나도 없었습니다.)
+       2. 메뉴는 전부 손가락으로. SELECT·START 는 이제 **게임 전용**입니다.
+       3. 화면 색 토글 — 템패드 주황 ↔ 게임 본래 색
+       4. 배치는 모드가 아니라 공식 하나로. 게임 화면은 늘 최대,
+          조작판은 비율 때문에 남는 좌우 여백에 삽니다.
+       5. 조작판 숨김 토글 — 게임패드로 할 때 화면을 더 키웁니다.
+
+     ★ 이 파일에서 절대 되돌리면 안 되는 것 — onTap() 을 쓰는 이유
+       v1 은 버튼을 `click` 으로 받았습니다. 그런데 pointerdown 에서
+       preventDefault 를 부르면 **아이폰 사파리가 click 을 안 보내는 경우가
+       있습니다.** 그러면 게임 중 유일한 탈출구인 MENU 가 죽습니다.
+       v2 는 click 을 아예 안 씁니다. pointerup 으로 직접 처리합니다.
 
      로직은 전부 브라우저 없이 검사됩니다 →  node test/all.js
      ========================================================================= -->
@@ -37,47 +53,78 @@ html,body{
 }
 #dev{ position:absolute; border:2px solid var(--or); border-radius:10px; overflow:hidden; }
 
-/* ── 가운데 ────────────────────────────────────────────────────────── */
+/* ── 가운데 (게임 화면 = 내용이 사는 곳) ─────────────────────────────── */
 #stage{ position:absolute; border:2px solid var(--or); }
 #screen{ display:block; image-rendering:pixelated; image-rendering:crisp-edges;
-         background:var(--bg); }
-/* 게임이 안 돌 때 이 위에 목록·메뉴를 그립니다 */
-/* 목록이 화면보다 길어질 수 있어 스크롤을 켭니다.
-   막대는 숨깁니다 — 기기처럼 보여야 하니까요. */
-/* ★ body 는 touch-action:none 이라 손가락 스크롤이 막혀 있습니다.
-     게임이 20개씩 되면 십자키로만 내려가야 해서 답답합니다.
+         background:var(--bg); width:100%; height:100%; }
+/* 게임이 안 돌 때 이 위에 목록·메뉴를 그립니다.
+   ★ body 는 touch-action:none 이라 손가락 스크롤이 막혀 있습니다.
      여기만 위아래 쓸기를 허락합니다 (좌우는 여전히 막습니다). */
 #page{ position:absolute; overflow-y:auto; overflow-x:hidden; padding:6px 8px;
        scrollbar-width:none; touch-action:pan-y; -webkit-overflow-scrolling:touch; }
 #page::-webkit-scrollbar{ display:none; }
 #page h2{ font-size:calc(var(--fs) * .85); letter-spacing:2px; color:var(--or);
           border-bottom:1px solid var(--dim); padding-bottom:3px; margin-bottom:5px; }
-.row{ font-size:calc(var(--fs) * .85); line-height:1.4; letter-spacing:.5px; color:var(--mid);
-      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:1px 3px; }
+
+/* ★★ v2 — 줄은 전부 **손가락으로 누르는 것**입니다. ★★
+     그래서 최소 높이를 못 박습니다. 글자 크기를 아무리 줄여도
+     누를 수 있는 높이는 38px 밑으로 안 내려갑니다.
+     (손가락 권장 최소치가 44px 인데, 작은 화면이라 38 로 타협했습니다.) */
+.row{ font-size:calc(var(--fs) * .85); letter-spacing:.5px; color:var(--mid);
+      padding:4px 6px; min-height:38px; display:flex; flex-direction:column;
+      justify-content:center; border-bottom:1px solid rgba(120,66,15,.35); }
+.row .t{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .row.sel{ background:var(--or); color:var(--bg); }
-.row .sub{ font-size:calc(var(--fs) * .68); color:var(--dim); }
-/* 메뉴는 일곱 줄이 한 화면에 들어가야 해서 바짝 붙입니다.
-   글자를 아주 크게 하면 넘치는데, 그때는 고른 줄이 따라 스크롤됩니다. */
-.row.one{ display:flex; align-items:baseline; gap:6px;
-          font-size:calc(var(--fs) * .8); line-height:1.15; padding:1px 3px; }
-.row.one .sub{ margin-left:auto; font-size:calc(var(--fs) * .62); }
+.row .sub{ font-size:calc(var(--fs) * .68); color:var(--dim);
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .row.sel .sub{ color:var(--bg); opacity:.8; }
-#page .empty{ font-size:calc(var(--fs) * .78); color:var(--dim); line-height:1.7; margin-top:6px; }
-/* 길게 누르는 동안 차오르는 막대 — "누르고 있으면 뭔가 된다"를 보여줍니다 */
-/* ★ 막대는 실제 시간(0.9초)보다 조금 빨리 찹니다.
-     꽉 찬 뒤에도 잠깐 여유가 있어야 "어, 이거 지워지겠다" 하고 뗄 수 있습니다.
-     막대가 차는 순간이 곧 발동이면 경고 구간이 없는 셈입니다. */
-.row .hold{ height:2px; background:var(--or); width:0; margin-top:2px;
+.row.press{ background:rgba(248,134,30,.28); }
+/* 한 줄짜리 (메뉴·시스템) — 이름과 설명이 같은 줄 양끝에 */
+.row.one{ flex-direction:row; align-items:center; gap:8px; }
+.row.one .t{ flex:0 1 auto; }
+.row.one .sub{ margin-left:auto; }
+
+/* ★ 넣기 버튼. 목록 맨 위에 둡니다 — 게임이 하나도 없을 때
+     제일 먼저 보여야 하는 것이기 때문입니다. 점선으로 게임과 구분합니다. */
+.row.add{ border:1px dashed var(--dim); border-radius:6px; color:var(--or);
+          margin-bottom:6px; align-items:center; flex-direction:row; }
+
+/* 길게 누르는 동안 차오르는 막대 — "누르고 있으면 뭔가 된다"를 보여줍니다.
+   ★ 막대는 실제 시간(0.9초)보다 조금 빨리 찹니다. 꽉 찬 뒤에도 잠깐
+     여유가 있어야 "어, 이거 지워지겠다" 하고 뗄 수 있습니다. */
+.row .hold{ height:2px; background:var(--or); width:0; margin-top:3px;
             transition:width .65s linear; }
 .row.holding .hold{ width:100%; }
-/* 고른 줄은 바탕이 주황이라 같은 색 막대가 안 보입니다 */
-.row.sel .hold{ background:var(--bg); }
-/* 지울까 물어보는 화면 */
-#page .ask{ font-size:calc(var(--fs) * .78); color:var(--or); line-height:1.6; margin-top:6px; }
+.row.sel .hold{ background:var(--bg); }   /* 고른 줄은 바탕이 주황이라 */
+
+#page .empty{ font-size:calc(var(--fs) * .78); color:var(--dim); line-height:1.7; margin-top:6px; }
+
+/* ── 지울까 물어보는 화면 ──────────────────────────────────────────────
+   ★ v2 — 화면에 보이는 버튼 두 개로 답합니다.
+     v1 은 "START 를 눌러 지움" 이었는데, 그건 규칙을 하나 더 외우게
+     하는 것입니다. 눈에 보이는 버튼은 외울 것이 없습니다. */
+#page .ask{ font-size:calc(var(--fs) * .78); color:var(--or); line-height:1.55; }
 #page .ask b{ display:block; color:var(--bg); background:var(--or);
-              padding:1px 3px; margin:4px 0; white-space:nowrap;
+              padding:2px 4px; margin:4px 0; white-space:nowrap;
               overflow:hidden; text-overflow:ellipsis; }
 #page .ask .warn{ color:var(--dim); }
+.ask2{ display:flex; gap:8px; margin-top:10px; }
+.ask2 .b{ flex:1; min-height:42px; display:flex; align-items:center; justify-content:center;
+          border:2px solid var(--dim); border-radius:8px; color:var(--dim);
+          font-size:calc(var(--fs) * .8); letter-spacing:1px; }
+/* 안전한 쪽을 밝게, 위험한 쪽을 흐리게. 눈이 먼저 KEEP 으로 갑니다. */
+.ask2 .b.keep{ border-color:var(--or); color:var(--or); }
+.ask2 .b.del.press{ background:var(--or); color:var(--bg); }
+.ask2 .b.keep.press{ background:var(--or); color:var(--bg); }
+/* 창이 막 떴을 때는 아무것도 못 누릅니다 (아래 ARM_MS) */
+.ask2.cold{ opacity:.45; }
+
+/* 메뉴 줄 안의 작은 버튼 (LOAD / SAVE) */
+.mini{ min-width:46px; min-height:30px; display:flex; align-items:center; justify-content:center;
+       border:1px solid var(--dim); border-radius:5px; color:var(--or);
+       font-size:calc(var(--fs) * .62); letter-spacing:1px; margin-left:6px; }
+.row.sel .mini{ border-color:var(--bg); color:var(--bg); }
+.mini.press{ background:var(--or); color:var(--bg); }
 
 /* ── 좌우 판 ───────────────────────────────────────────────────────── */
 .pane{ position:absolute; top:0; bottom:0; }
@@ -88,15 +135,13 @@ html,body{
 .lbl{ position:absolute; font-size:9px; letter-spacing:1.5px; color:var(--dim);
       pointer-events:none; }
 
-/* ★ 높이를 버튼 바로 위까지로 잘라둡니다.
-     글자를 아주 크게 하면 안내글이 길어져 MENU 버튼을 덮습니다.
-     실제 크기는 fit() 이 정합니다. */
-#info{ position:absolute; overflow:hidden; font-size:calc(var(--fs) * .78); line-height:1.55; letter-spacing:.6px; }
+#info{ position:absolute; overflow:hidden; font-size:calc(var(--fs) * .78);
+       line-height:1.55; letter-spacing:.6px; pointer-events:none; }
 #info .h{ color:var(--or); font-size:calc(var(--fs) * .78); letter-spacing:2px; }
 #info .v{ color:var(--dim); }
 #info hr{ border:0; border-top:1px solid var(--dim); margin:2px 0 5px; }
 
-/* ── 버튼은 전부 고정 크기 (손가락 크기라 글자와 무관) ──────────────
+/* ── 게임 버튼은 전부 고정 크기 (손가락 크기라 글자와 무관) ──────────
    NES 패드 배치를 따릅니다:
      십자키 왼쪽 · SELECT/START 작은 알약 두 개 · B A 동그라미 (B 가 왼쪽) */
 .btn{ position:absolute; border:3px solid var(--dim); border-radius:50%;
@@ -104,42 +149,78 @@ html,body{
       font-size:15px; color:var(--dim); }
 /* ★★ 보이는 것보다 **누를 수 있는 면이 더 넓습니다.** ★★
      테두리 바깥으로 10px 씩 더 잡습니다. 게임 중에 화면을 안 보고
-     엄지로 더듬어 누르기 때문에, 빗나가도 눌리는 게 맞습니다.
-     (보이는 동그라미는 그대로라 화면은 안 지저분해집니다.) */
+     엄지로 더듬어 누르기 때문에, 빗나가도 눌리는 게 맞습니다. */
 .btn::before, .cap::before{ content:""; position:absolute; inset:-10px; }
 .btn.on{ border-color:var(--or); color:var(--or); background:rgba(248,134,30,.18); }
+/* ★ GBA 의 L·R — A·B 위에 답니다. 모서리를 둥근 네모로 해서
+     동그란 A·B 와 손끝 느낌이 다르게 했습니다 (안 보고 눌러도 구분되게). */
+.btn.sh{ border-radius:9px; font-size:13px; }
 /* SELECT / START — 눕힌 알약 */
 .cap{ position:absolute; border:2px solid var(--dim); border-radius:99px;
       display:flex; align-items:center; justify-content:center;
       font-size:8px; letter-spacing:.5px; color:var(--dim); }
 .cap.on{ border-color:var(--or); color:var(--or); background:rgba(248,134,30,.18); }
-/* 알약 위에 붙는 이름표 (NES 처럼) */
 .caplbl{ position:absolute; font-size:7px; letter-spacing:1px; color:var(--dim);
          text-align:center; pointer-events:none; }
-/* 탈출구는 항상 밝게. 흐리면 못 찾습니다. */
-.cap.up{ border-color:var(--or); color:var(--or); font-size:10px;
-         letter-spacing:1.5px; border-radius:8px; }
-.cap.up.on{ background:var(--or); color:var(--bg); }
 /* 글자 크기 조절 (왼쪽 판 위) */
 .fsbtn{ position:absolute; border:2px solid var(--dim); border-radius:6px;
         display:flex; align-items:center; justify-content:center;
         font-size:12px; color:var(--dim); }
 .fsbtn.on{ border-color:var(--or); color:var(--or); }
 
+/* ── ★★ 구석 존 — 메뉴와 토글. 게임 조작과 완전히 분리된 구역 ★★ ──────
+   사용자 요구: "메뉴 버튼과 메뉴에서 필요한 버튼은 우측 상단에 표시하여
+   독립적으로 동작하게." 게임 버튼 근처에 두지 않는 것이 핵심입니다.
+   여기 있는 것들은 **게임에 아무 입력도 보내지 않습니다.** */
+/* ★ 세로로 쌓습니다. 가로로 늘어놓으면 좁은 기기에서 자리가 모자라
+     **게임 화면 위로 넘어옵니다.** (배치를 그림으로 뽑아 보고 알았습니다 —
+     아이폰SE 나 GBA 에서 20px 쯤 게임을 덮고 있었습니다.)
+     세로로 쌓으면 오른쪽 판 폭이 얼마든 상관없이 제자리에 앉습니다.
+     자리는 fit() 이 정합니다. */
+#zone{ position:absolute; display:flex; flex-direction:column; gap:5px; z-index:5; }
+/* ★ position:relative 가 반드시 있어야 합니다.
+     아래 ::before(넓힌 과녁)는 position:absolute 인데, 기준이 될 조상이
+     없으면 #zone(position:absolute) 을 기준으로 잡습니다. 그러면 세 버튼의
+     과녁이 전부 존 전체 크기가 되어 **서로 겹치고 엉뚱한 버튼이 눌립니다.** */
+.zb{ position:relative;
+     width:100%; height:var(--zh,28px); padding:0 4px;
+     display:flex; align-items:center; justify-content:center;
+     border:2px solid var(--or); border-radius:7px;
+     color:var(--or); font-size:10px; letter-spacing:1px; background:var(--bg);
+     white-space:nowrap; overflow:hidden; }
+/* 보이는 것보다 누를 수 있는 면을 좌우로 조금 더 넓게.
+   ★ 위아래로는 2px 만 넓힙니다 — 5px 간격이라 더 넓히면 이웃과 겹칩니다. */
+.zb::before{ content:""; position:absolute; inset:-2px -6px; }
+.zb.press{ background:var(--or); color:var(--bg); }
+/* 꺼져 있는 토글은 흐리게 — 지금 어떤 상태인지 한눈에 */
+.zb.off{ border-color:var(--dim); color:var(--dim); }
+
 #bar{ position:absolute; left:8px; right:8px; bottom:3px; display:flex;
       justify-content:space-between; font-size:9px; letter-spacing:1px;
       color:var(--dim); pointer-events:none; }
-/* 왼쪽 글자만 눌러서 템패드로 돌아갑니다 */
-/* 나가는 길은 눈에 보여야 합니다. 테두리를 둘러 버튼처럼. */
-#back{ pointer-events:auto; padding:2px 7px; margin:-2px -1px;
-       border:1px solid var(--dim); border-radius:5px; color:var(--or); }
+/* ★ 이 글자는 이름표입니다. 아무 일도 안 합니다.
+     v1 에서는 여기가 "나가기" 였는데 십자키 바로 옆이라 게임 중에
+     엄지가 스치면 그대로 밖으로 튕겨나갔습니다. */
+#back{ padding:2px 7px; margin:-2px -1px; color:var(--mid); }
+/* 오른쪽 잘림 조절은 여기를 길게 눌러서 합니다 (게임 버튼을 안 씁니다) */
+#diag{ pointer-events:auto; padding:2px 6px; margin:-2px -1px; }
 #note{ position:absolute; left:8px; right:8px; bottom:15px; font-size:calc(var(--fs) * .7);
        letter-spacing:1px; color:var(--or); text-align:center; pointer-events:none; }
 
 #rot{ position:fixed; inset:0; display:none; background:var(--bg);
       align-items:center; justify-content:center; font-size:14px; letter-spacing:2px; z-index:99; }
 @media (orientation:portrait){ #rot{ display:flex; } #dev{ visibility:hidden; } }
-#file,#dir{ display:none; }
+/* ★ display:none 으로 숨기면 안 됩니다.
+     사파리는 화면에 없는 <input type=file> 의 프로그램적 click() 을
+     무시한 전례가 있습니다. 그러면 "+ ADD GAME" 이 아무 반응 없는 버튼이
+     됩니다 — 게임을 넣는 유일한 길이 막힙니다.
+     보이지만 않게 화면 밖으로 밀어둡니다. 이게 널리 쓰는 안전한 방법입니다. */
+#file,#dir{ position:fixed; left:-9999px; top:0; width:1px; height:1px;
+            opacity:0; pointer-events:none; }
+/* 조작판을 껐을 때 — 게임 버튼만 숨깁니다. 구석 존은 그대로 남습니다.
+   ★ 이게 핵심입니다. 다 숨겨버리면 패드가 없는 사람이 갇힙니다. */
+.hidepad #padArea, .hidepad #padHint, .hidepad #lblMove,
+.hidepad .btn, .hidepad .cap, .hidepad .caplbl, .hidepad .fsbtn{ display:none; }
 </style>
 </head>
 <body>
@@ -163,9 +244,9 @@ html,body{
 
   <div class="pane" id="paneR">
     <div id="info"></div>
-    <!-- ★ 항상 "한 단계 위로" 가는 버튼. 게임 중에는 유일한 탈출구입니다.
-         게임보이 버튼 8개는 전부 게임이 가져가기 때문입니다. -->
-    <div class="cap up" id="btnUp">MENU</div>
+    <!-- ★ GBA 일 때만 보입니다. A·B 바로 위 (사용자 지정 배치). -->
+    <div class="btn sh" id="btnL">L</div>
+    <div class="btn sh" id="btnR">R</div>
     <div class="caplbl" id="lblSel">SELECT</div>
     <div class="caplbl" id="lblSta">START</div>
     <div class="cap" id="btnSel"></div>
@@ -174,32 +255,40 @@ html,body{
     <div class="btn" id="btnA">A</div>
   </div>
 
+  <!-- ★★ 구석 존. 게임 입력과 절대 섞이지 않습니다. ★★ -->
+  <div id="zone">
+    <div class="zb main" id="zMain">MENU</div>
+    <div class="zb" id="zClr">CLR</div>
+    <div class="zb" id="zPad">PAD</div>
+  </div>
+
   <div id="note"></div>
-  <!-- ★ 예전에는 이 글자가 "누르면 나가기" 였습니다.
-       그런데 **십자키 바로 옆**이라 게임 중에 엄지가 스치면 그대로
-       밖으로 튕겨나갔습니다. 이제 그냥 이름표입니다. 아무 일도 안 합니다.
-       나가는 길은 기기 고르는 화면의 MENU → EXIT 하나뿐입니다. -->
   <div id="bar"><span id="back">TVA // FIELD UNIT</span><span id="diag">—</span></div>
 </div>
 
 <div id="rot">TURN THE DEVICE SIDEWAYS</div>
 <!-- 파일 하나 또는 여러 개 -->
-<input type="file" id="file" accept=".gb,.gbc" multiple>
+<input type="file" id="file" accept=".gb,.gbc,.gba" multiple>
 <!-- ★ 폴더째. webkitdirectory 는 표준은 아니지만 안드로이드·PC 에서 됩니다.
      아이폰 사파리는 속성만 있고 실제로는 안 돼서, 아래 CAN_DIR 로 가려냅니다. -->
 <input type="file" id="dir" webkitdirectory directory multiple>
 
-<!-- ★ binjgb 를 먼저 불러야 합니다. 아래에 두면 boot() 이 먼저 돌아서 못 찾습니다.
-     파일이 없어도 페이지는 떠야 하므로 onerror 로 넘어갑니다. -->
+<!-- ★ 에뮬레이터를 먼저 불러야 합니다. 아래에 두면 boot() 이 먼저 돌아서 못 찾습니다.
+     파일이 없어도 페이지는 떠야 하므로 onerror 로 넘어갑니다.
+     mgba.js 는 없을 수도 있습니다 — 그러면 GBA 만 못 씁니다. -->
 <script src="binjgb.js" onerror="window.__noBinjgb=1"></script>
 <script src="game.js"></script>
 <script src="ui.js"></script>
 <script src="pad.js"></script>
+<!-- ★ GBA 코어(mgba.js)는 여기서 안 부릅니다.
+     여기 두면 파일이 없을 때 **켤 때마다 404 를 한 번 기다립니다.**
+     게임보이만 하는 사람에게는 순전한 손해라, GBA 를 고른 순간에만
+     불러옵니다 (아래 loadMgba). -->
 <script>
 /* ── 새 상태값은 맨 위에 ───────────────────────────────────────────── */
-let scale     = 2;      /* 게임 화면 확대율 (정수) */
 let edgeRight = 0;      /* 폰마다 오른쪽이 잘려서 따로 조절 */
 let wasmMod   = null;   /* binjgb. 처음 필요할 때 부릅니다 */
+let mgbaMod   = null;   /* mGBA. 마찬가지 */
 let ui        = null;
 let pad       = null;
 /* ★★ 화면 깜빡임 방지 ★★
@@ -207,13 +296,39 @@ let pad       = null;
    그때마다 화면 전체를 다시 재면 번쩍번쩍 깜빡입니다.
      1. 한 프레임에 한 번만
      2. 크기가 그대로면 아무것도 안 함
-     3. 노치 여백은 한 번만 재서 기억 (매번 DOM 을 만들었다 지우면 느립니다) */
+     3. 노치 여백은 한 번만 재서 기억 */
 let fitPending  = false;
 let lastFitKey  = "";
 let insCache    = null;
 
-const GW = 160, GH = 144, MARGIN = 12, MIN_PANE = 150;
+/* 시스템마다 화면 크기가 다릅니다 */
+const SCREENS = { gb:[160,144], gbc:[160,144], gba:[240,160] };
+const MARGIN = 12;
+/* ★ 조작판이 살 최소 폭. 십자키(약 110) + 좌우 여유.
+     이보다 좁아지면 게임 화면을 줄여서라도 조작판 자리를 지킵니다. */
+const MIN_SIDE_PAD = 150;
+/* ★ 조작판을 껐을 때도 구석 존(MENU/CLR/PAD)은 남아야 합니다 — 안 그러면
+     패드가 없는 사람이 갇힙니다. 그래서 0 이 아니라 존이 앉을 만큼은 남깁니다.
+     150 → 76 이라 화면은 여전히 양쪽으로 74px 씩, 도합 148px 넓어집니다. */
+const MIN_SIDE_BARE = 76;
+
 const $ = id => document.getElementById(id);
+
+/* ★ 요소를 그 자리에 놓습니다.
+     v1 은 `el.style.cssText += ";left:...;top:..."` 였습니다. CSS 는 나중 것이
+     이기니 화면은 맞게 나오지만, **문자열이 fit() 을 부를 때마다 계속 길어집니다.**
+     화면을 돌리거나 글자 크기를 바꿀 때마다 조금씩 쌓입니다.
+     게다가 값을 읽어서 확인하려 하면 옛 값이 먼저 잡혀서 배치를 검증할 수가
+     없습니다 (실제로 이것 때문에 멀쩡한 배치를 겹쳤다고 오해했습니다).
+     속성을 직접 넣으면 언제나 하나의 값만 남습니다.                       */
+function place(el, x, y, w, h){
+  if (!el) return;
+  const s = el.style;
+  s.left = Math.round(x) + "px";
+  s.top  = Math.round(y) + "px";
+  if (w !== undefined) s.width  = Math.round(w) + "px";
+  if (h !== undefined) s.height = Math.round(h) + "px";
+}
 
 /* ★★ 화면에 글자를 넣기 전에 반드시 이걸 거칩니다. ★★
      게임 이름은 롬 안에서 읽거나 **파일 이름에서 가져옵니다.**
@@ -226,10 +341,6 @@ function esc(s){
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
-/* ★ 폴더째 고르기가 되는 기기인지.
-     아이폰·아이패드 사파리는 webkitdirectory 속성은 있는데 실제로는
-     폴더를 못 고릅니다. 그래서 속성 검사만으로는 안 되고 기기를 봅니다.
-     (아이패드는 최근 것부터 "Macintosh" 라고 말해서 손가락 수까지 봅니다.) */
 /* ★ 지우기 확인창이 뜬 시각. 뜬 직후 잠깐은 버튼을 안 받습니다.
      길게 누르던 손가락을 떼면서 다른 버튼이 같이 눌리는 사고를 막습니다. */
 let armAt = 0;
@@ -243,10 +354,15 @@ let doLeave = null;
 /* ── 블루투스 게임패드 상태 ───────────────────────────────────────────
    ★ 일부러 여기(맨 바깥)에 둡니다. boot() 안에 두면 검사에서 들여다볼 수가
      없어서, "돌고 있는지" 를 확인할 방법이 사라집니다. */
-let gpPrev = [];      /* 지난 프레임에 눌려 있던 것들 */
+let gpPrev = [];      /* 지난 프레임에 눌려 있던 것들 (조합을 걷어낸 뒤) */
+let gpMenu = false;   /* 지난 프레임에 MENU 조합이 눌려 있었는가 */
 let gpRaf  = 0;       /* 프레임 예약 번호. 0 이면 안 돌고 있음 */
 let gpSeen = false;   /* 첫 입력을 봤는가 (소리 깨우기용) */
 
+/* ★ 폴더째 고르기가 되는 기기인지.
+     아이폰·아이패드 사파리는 webkitdirectory 속성은 있는데 실제로는
+     폴더를 못 고릅니다. 그래서 속성 검사만으로는 안 되고 기기를 봅니다.
+     (아이패드는 최근 것부터 "Macintosh" 라고 말해서 손가락 수까지 봅니다.) */
 const CAN_DIR = (() => {
   try {
     if (!("webkitdirectory" in document.createElement("input"))) return false;
@@ -256,6 +372,51 @@ const CAN_DIR = (() => {
     return !iOS;
   } catch (e) { return false; }
 })();
+
+/* ══ ★★ 누르기 — 이 프로젝트에서 제일 조심해야 하는 부분 ★★ ══════════
+
+   v1 은 화면 버튼을 `click` 으로 받았습니다. 그런데 pointerdown 에서
+   preventDefault 를 부르면 **아이폰 사파리가 click 을 안 보내는 일이
+   있습니다.** 그러면 게임 중 유일한 탈출구인 MENU 가 죽습니다.
+   (인계서 12장 B-2 — "제일 위험한 미확인 항목" 으로 적혀 있던 것입니다.)
+
+   그래서 v2 는 click 을 아예 안 씁니다. pointerup 으로 직접 처리합니다.
+     · pointerdown 에서 "이 버튼에서 시작했다" 고 표시
+     · pointerup 이 같은 버튼에서 오면 실행
+     · 손가락이 밖으로 나가거나(pointerleave) 전화가 오면(pointercancel) 취소
+   이러면 어느 브라우저에서든 확실히 동작합니다.                          */
+function onTap(el, fn){
+  if (!el) return;
+  let armed = false, sx = 0, sy = 0;
+  const off = () => { armed = false; el.classList.remove("press"); };
+  el.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    armed = true; sx = e.clientX || 0; sy = e.clientY || 0;
+    el.classList.add("press");
+  }, { passive:false });
+  /* ★ 손가락이 버튼 밖으로 끌려나갔으면 취소합니다.
+       ★★ pointerleave 만으로는 안 됩니다. 터치는 pointerdown 이 일어난
+         요소에 **자동으로 붙잡혀서**(implicit pointer capture) 손가락이
+         밖으로 나가도 pointerleave 가 안 오고, pointerup 도 원래 버튼으로
+         돌아옵니다. 그래서 "눌렀다가 마음이 바뀌어 끌고 나가서 뗐는데도
+         그대로 실행되는" 일이 벌어졌습니다.
+         움직인 거리로 직접 판정합니다. 목록 쪽(#page)과 같은 방식입니다.
+         (2026-08-11 교차검사에서 잡았습니다.)                            */
+  el.addEventListener("pointermove", e => {
+    if (!armed) return;
+    if (Math.abs((e.clientX||0) - sx) > 16 || Math.abs((e.clientY||0) - sy) > 16) off();
+  }, { passive:true });
+  el.addEventListener("pointerup", e => {
+    e.preventDefault();
+    el.classList.remove("press");
+    if (!armed) return;
+    armed = false;
+    fn(e);
+  }, { passive:false });
+  el.addEventListener("pointercancel", off);
+  el.addEventListener("pointerleave", off);
+  el.addEventListener("lostpointercapture", off);
+}
 
 /* ══ 크기 맞추기 ══════════════════════════════════════════════════════
    ★ vh/vw 를 믿지 마세요. 폰마다 주소창을 포함해서 알려줍니다.
@@ -280,6 +441,20 @@ function scheduleFit(){
   requestAnimationFrame(() => { fitPending = false; fit(); });
 }
 
+/* ★★ v2 의 배치 — 모드가 아니라 공식 하나입니다. ★★
+
+   v1 은 정수배 확대만 했습니다 (도트가 안 뭉개지니까). 그런데 그러면
+   폰 화면이 아무리 커도 게임은 계단식으로만 커져서 여백이 잔뜩 남았습니다.
+
+   v2 는 이렇게 정합니다.
+       게임 폭 = min( 화면높이 × 화면비율,  화면폭 − 2 × 조작판최소폭 )
+   · 세로를 먼저 다 씁니다 (가로 화면이라 세로가 늘 부족합니다).
+   · 그래서 가로가 모자라면, 조작판 자리를 지킬 만큼만 줄입니다.
+   · 늘리기도 자르기도 안 합니다. 비율은 언제나 그대로입니다.
+
+   결과적으로 넓은 폰에서는 게임이 꽉 차고 좌우에 조작판이 넉넉히 앉고,
+   좁은 폰(16:9) + GBA 처럼 빠듯한 조합에서만 게임이 조금 줄어듭니다.
+   "전체화면 모드" 라는 것이 따로 필요 없어집니다.                     */
 function fit(){
   const vv = window.visualViewport, de = document.documentElement;
   const small = (a,b,c) => Math.floor(Math.min(a||Infinity, b||Infinity, c||Infinity));
@@ -287,9 +462,13 @@ function fit(){
   const H = small(vv && vv.height, de && de.clientHeight, window.innerHeight);
   if(!isFinite(W) || !isFinite(H) || !W || !H) return;
 
+  const st8 = ui ? ui.state : { systemId:"gb", padVisible:true };
+  const showPad = st8.padVisible !== false;
+  const [SW, SH] = SCREENS[st8.systemId] || SCREENS.gb;
+
   const ins = insets();
   /* ★ 지난번과 똑같으면 아무것도 안 합니다. 이게 깜빡임을 없앱니다. */
-  const key = `${W}x${H}|${ins.t},${ins.r},${ins.b},${ins.l}|${edgeRight}|${fsNow}`;
+  const key = `${W}x${H}|${ins.t},${ins.r},${ins.b},${ins.l}|${edgeRight}|${fsNow}|${SW}|${showPad?1:0}`;
   if (key === lastFitKey) return;
   lastFitKey = key;
 
@@ -298,18 +477,27 @@ function fit(){
   const dev = $("dev");
   dev.style.left = (ins.l+MARGIN)+"px"; dev.style.top = (ins.t+MARGIN)+"px";
   dev.style.width = dw+"px"; dev.style.height = dh+"px";
+  dev.classList.toggle("hidepad", !showPad);
 
-  /* ★ 정수배만. 소수배로 늘리면 도트가 뭉개집니다. */
-  scale = 1;
-  for(let s = 12; s >= 1; s--){
-    if(GH*s <= dh-8 && GW*s <= dw-MIN_PANE*2){ scale = s; break; }
-  }
-  const gw = GW*scale, gh = GH*scale;
+  /* ── 게임 화면 크기 — 위에 적은 공식 ─────────────────────────────── */
+  const minSide = showPad ? MIN_SIDE_PAD : MIN_SIDE_BARE;
+  const aspect = SW / SH;
+  /* 위아래로 조금 띄웁니다 (테두리와 안내줄 자리) */
+  let gh = dh - 10;
+  let gw = Math.round(gh * aspect);
+  const maxW = dw - minSide*2;
+  if (gw > maxW) { gw = Math.max(80, maxW); gh = Math.round(gw / aspect); }
+  /* 아주 좁은 기기에서도 최소한은 보이게 */
+  if (gh > dh - 10) { gh = dh - 10; gw = Math.round(gh * aspect); }
+
   const gx = Math.round((dw-gw)/2), gy = Math.round((dh-gh)/2);
 
-  const st = $("stage");
-  st.style.left=(gx-2)+"px"; st.style.top=(gy-2)+"px";
-  st.style.width=(gw+4)+"px"; st.style.height=(gh+4)+"px";
+  const stg = $("stage");
+  stg.style.left=(gx-2)+"px"; stg.style.top=(gy-2)+"px";
+  stg.style.width=(gw+4)+"px"; stg.style.height=(gh+4)+"px";
+  /* ★ 캔버스의 **그림 크기**(width/height 속성)는 에뮬레이터가 정합니다.
+       여기서는 **보이는 크기**(style)만 정합니다. 둘을 헷갈리면
+       화면이 뭉개지거나 늘어납니다. */
   $("screen").style.width=gw+"px"; $("screen").style.height=gh+"px";
   const pg = $("page");
   pg.style.left="0px"; pg.style.top="0px"; pg.style.width=gw+"px"; pg.style.height=gh+"px";
@@ -317,49 +505,89 @@ function fit(){
   $("paneL").style.left="0px";        $("paneL").style.width=gx+"px";
   $("paneR").style.left=(gx+gw)+"px"; $("paneR").style.width=(dw-gx-gw)+"px";
 
-  /* ── 버튼 자리 ────────────────────────────────────────────────────
+  /* ── ★ 구석 존 (오른쪽 판의 맨 위) ────────────────────────────────
+     ★★ 게임 화면 **밖**에 놓는 것이 핵심입니다.
+       처음에는 기기의 오른쪽 위 구석(right:8px)에 붙였는데, 좁은 기기나
+       GBA 처럼 화면이 넓은 경우 **게임 화면 오른쪽 위를 20px 쯤 덮었습니다.**
+       배치를 그림으로 뽑아 보고서야 알았습니다.
+       이제 게임이 끝나는 자리(gx+gw)부터 시작하므로 겹칠 수가 없습니다.  */
+  const rw0 = dw - gx - gw;                  /* 오른쪽 판 폭 */
+  const zoneW = Math.max(44, rw0 - 12);
+  const zone = $("zone");
+  /* ★ 화면이 낮은 기기(아이폰SE 1세대 같은 옛 폰)에서는 버튼을 낮춥니다.
+       안 그러면 존이 SELECT 알약 위로 몇 픽셀 내려앉습니다.
+       (배치를 그림으로 뽑아 재고서 알았습니다 — 568x320 에서 2px 겹쳤습니다.) */
+  const zh = dh < 340 ? 23 : 28;
+  const zoneH = zh * 3 + 5 * 2;              /* 버튼 3개 + 사이 간격 */
+  zone.style.left  = Math.round(gx + gw + 6) + "px";
+  zone.style.top   = "6px";
+  zone.style.width = zoneW + "px";
+  zone.style.height = zoneH + "px";
+  zone.style.right = "auto";
+  zone.style.setProperty("--zh", zh + "px");
+  /* 존이 끝나는 높이 — 안내글은 그 아래부터 */
+  const zoneBottom = 6 + zoneH;
+
+  /* ★★ 조작판을 껐을 때 숨겨야 하는 것들을 **일찍** 처리합니다. ★★
+       아래에서 일찍 돌아가기 때문에, 여기서 안 끄면 영영 못 끕니다.
+       특히 L·R 은 인라인 display 를 쓰는데 인라인은 CSS(.hidepad)를 이깁니다.
+       그래서 조작판을 껐는데 **L·R 만 유령처럼 남아 있었습니다.**
+       (게임보이로 돌아가도 남았습니다.) 2026-08-11 교차검사에서 잡았습니다. */
+  const isGba = st8.systemId === "gba";
+  const shH = 30, shGap = 10;
+  for (const id of ["btnL", "btnR"])
+    $(id).style.display = (showPad && isGba) ? "flex" : "none";
+  /* 안내글도 마찬가지 — 조작판을 끄면 오른쪽 판이 좁아서 자리가 없습니다.
+     안 끄면 옛 배치가 그대로 남아 구석 존 자리에 겹쳐 얹힙니다. */
+  $("info").style.display = showPad ? "block" : "none";
+
+  if (!showPad) { $("diag").textContent = `${W}x${H}`; return; }
+
+  /* ── 게임 버튼 자리 ───────────────────────────────────────────────
      NES 패드처럼 **십자키와 A·B 를 같은 높이**에 둡니다.
      SELECT·START 는 A·B 에서 넉넉히 띄웁니다 — 가까우면 게임 중에
-     엄지가 스치면서 눌립니다.
-     크기는 전부 고정입니다 (손가락 크기라 글자와 무관).             */
+     엄지가 스치면서 눌립니다. 크기는 전부 고정입니다.               */
   const rw   = dw - gx - gw;
-  /* ★ 46 → 58. 46px 는 손가락 최소 권장치(약 44)에 겨우 걸쳐서,
-       게임 중에 자꾸 빗나갔습니다. 실제 누르는 면은 아래 CSS 로
-       테두리 바깥까지 더 넓힙니다(보이는 것보다 큰 과녁). */
-  const bs   = 58;          /* 동그란 버튼 지름 */
+  const bs   = 58;          /* 동그란 버튼 지름 (44 는 너무 작아 자꾸 빗나갔습니다) */
   const gapB = 16;          /* B 와 A 사이 */
   const pillW = 48, pillH = 18;
-  const GAP_PILL_BTN = 34;  /* ★ SELECT·START 와 A·B 사이. 넉넉히. */
+  const GAP_PILL_BTN = 30;  /* SELECT·START 와 A·B 사이. 넉넉히. */
 
-  /* ★ A·B 중심 높이 — 십자키도 여기에 맞춥니다.
-       버튼을 맨 아래에 붙이면 십자키가 들어갈 자리가 없어 쪼그라듭니다.
-       십자키가 제 크기로 들어갈 만큼만 올립니다.                     */
+  /* ★ A·B 중심 높이 — 십자키도 여기에 맞춥니다. */
   const PAD_TARGET = 110;
-  const ctrY = dh - Math.max(26 + bs/2, PAD_TARGET/2 + 26);   /* 하단 막대와 안 겹치게 */
+  const ctrY = dh - Math.max(26 + bs/2, PAD_TARGET/2 + 26);
 
   const bx = Math.round((rw - (bs*2+gapB)) / 2);
   const byTop = Math.round(ctrY - bs/2);
-  $("btnB").style.cssText += `;left:${bx}px;top:${byTop}px;width:${bs}px;height:${bs}px;`;
-  $("btnA").style.cssText += `;left:${bx+bs+gapB}px;top:${byTop}px;width:${bs}px;height:${bs}px;`;
+  place($("btnB"), bx, byTop, bs, bs);
+  place($("btnA"), bx+bs+gapB, byTop, bs, bs);
 
-  /* SELECT·START 알약 + 이름표 */
+  /* ★ GBA 의 L·R — A·B 바로 위 (사용자 지정).
+       터치로는 보조입니다. GBA 는 블루투스 패드 사용이 기본 상정입니다.
+       보이기/숨기기는 위(일찍 돌아가기 전)에서 이미 정했습니다. */
+  const shY = byTop - shGap - shH;
+  place($("btnL"), bx,            shY, bs, shH);
+  place($("btnR"), bx+bs+gapB,    shY, bs, shH);
+
+  /* SELECT·START 알약 + 이름표 — GBA 면 L·R 위로 더 올립니다 */
   const px = Math.round((rw - (pillW*2+gapB)) / 2);
-  const py = byTop - GAP_PILL_BTN - pillH;
-  $("btnSel").style.cssText += `;left:${px}px;top:${py}px;width:${pillW}px;height:${pillH}px;`;
-  $("btnSta").style.cssText += `;left:${px+pillW+gapB}px;top:${py}px;width:${pillW}px;height:${pillH}px;`;
-  $("lblSel").style.cssText += `;left:${px}px;top:${py-11}px;width:${pillW}px;`;
-  $("lblSta").style.cssText += `;left:${px+pillW+gapB}px;top:${py-11}px;width:${pillW}px;`;
+  const py = (isGba ? shY : byTop) - GAP_PILL_BTN - pillH;
+  place($("btnSel"), px, py, pillW, pillH);
+  place($("btnSta"), px+pillW+gapB, py, pillW, pillH);
+  place($("lblSel"), px, py-11, pillW);
+  place($("lblSta"), px+pillW+gapB, py-11, pillW);
 
-  /* 탈출구는 그 위에 */
-  const uw  = pillW*2+gapB;
-  const upY = py - 11 - 10 - 26;
-  $("btnUp").style.cssText += `;left:${px}px;top:${upY}px;width:${uw}px;height:26px;`;
-
-  /* 안내글은 MENU 버튼 위까지만 (글자를 키워도 버튼을 안 덮게) */
-  $("info").style.left = "12px";
-  $("info").style.top  = (gy+2) + "px";
-  $("info").style.width  = (rw-20) + "px";
-  $("info").style.height = Math.max(30, upY - (gy+2) - 8) + "px";
+  /* 안내글은 구석 존 아래부터 SELECT 이름표 위까지.
+     ★ 존 아래에서 시작해야 합니다. 겹치면 글자가 버튼 밑에 깔립니다. */
+  const infoTop = zoneBottom + 8;
+  const infoH = Math.max(0, py - 14 - infoTop);
+  $("info").style.left = "10px";
+  $("info").style.top  = infoTop + "px";
+  $("info").style.width  = (rw-18) + "px";
+  $("info").style.height = infoH + "px";
+  /* ★ 자리가 거의 없으면 아예 감춥니다. 한 줄만 잘려 보이는 것보다 낫습니다.
+       (아이폰SE 급 가로 + 사파리 툴바가 보이는 상태가 이 구간입니다.) */
+  $("info").style.display = infoH >= 24 ? "block" : "none";
 
   /* ── 왼쪽 판 ───────────────────────────────────────────────────────
      ★ 십자키 중심을 A·B 와 같은 높이에 맞춥니다.
@@ -378,10 +606,10 @@ function fit(){
   $("lblMove").style.top  = Math.round(ctrY - ps/2 - 13) + "px";
 
   const fx = Math.round((gx - (fw*2+fgap)) / 2);
-  $("fsDn").style.cssText += `;left:${fx}px;top:${fTop}px;width:${fw}px;height:${fh}px;`;
-  $("fsUp").style.cssText += `;left:${fx+fw+fgap}px;top:${fTop}px;width:${fw}px;height:${fh}px;`;
+  place($("fsDn"), fx, fTop, fw, fh);
+  place($("fsUp"), fx+fw+fgap, fTop, fw, fh);
 
-  $("diag").textContent = `${W}x${H} x${scale}`;
+  $("diag").textContent = `${W}x${H}`;
 }
 
 /* ══ 그리기 ═══════════════════════════════════════════════════════════ */
@@ -395,120 +623,94 @@ function draw(){
   sc.style.visibility = playing ? "visible" : "hidden";
   pg.style.display = playing ? "none" : "block";
   $("note").textContent = st.notice || "";
-  /* ★ 어디로 가는지 글자로. 갈 곳이 없으면 흐리게 해서 눌러도 소용없음을 보입니다. */
-  const upTxt = ui.upLabel();
-  $("btnUp").textContent = upTxt;
-  $("btnUp").style.opacity = (upTxt === "\u2014") ? ".3" : "1";
+
+  /* ── 구석 존 ─────────────────────────────────────────────────────── */
+  $("zMain").textContent = ui.cornerLabel();
+  /* 컬러·조작판 토글은 **게임 화면이 있을 때만** 뜻이 있습니다.
+     목록에서 CLR 을 눌러도 눈에 보이는 변화가 없으면 고장인 줄 압니다. */
+  const showToggles = playing || st.screen === "menu";
+  $("zClr").style.display = showToggles ? "flex" : "none";
+  $("zClr").textContent = st.colorReal ? "COLOR" : "AMBER";
+  $("zClr").classList.toggle("off", !st.colorReal);
+  $("zPad").style.display = "flex";
+  $("zPad").textContent = "PAD";
+  $("zPad").classList.toggle("off", !st.padVisible);
 
   if (st.screen === "system"){
-    pg.innerHTML = "<h2>SELECT SYSTEM</h2>" + GameUi.SYSTEMS.map((s,i) =>
-      `<div class="row ${i===st.cursor?"sel":""}">${s.name}<div class="sub">${s.desc}</div></div>`
+    pg.innerHTML = "<h2>SELECT SYSTEM</h2>" + ui.systems().map((s,i) =>
+      `<div class="row ${i===st.cursor?"sel":""}" data-s="${s.id}">
+         <div class="t">${s.name}</div><div class="sub">${s.desc}</div></div>`
     ).join("");
     inf.innerHTML = `<div class="h">FIELD UNIT</div><hr>
-      <div class="v">
-        &#9650;&#9660; &nbsp;MOVE<br>
-        A &nbsp;&nbsp;&nbsp;&nbsp;SELECT<br>
-        MENU &nbsp;EXIT
-      </div><br>
-      <div class="v">TO LEAVE,<br>PRESS MENU</div>`;
-  }
-  else if (st.screen === "top"){
-    /* ★ 나가는 길. 커서는 항상 BACK 에서 시작합니다.
-         잘못 눌러도 밖으로 안 나가게, 위험한 쪽을 아래에 둡니다. */
-    pg.innerHTML = `<h2>FIELD UNIT</h2>` +
-      ui.topItems().map((m,i) =>
-        `<div class="row one ${i===st.cursor?"sel":""}">${m.label}<span class="sub">${m.sub}</span></div>`
-      ).join("");
-    inf.innerHTML = `<div class="h">MENU</div><hr>
-      <div class="v">
-        &#9650;&#9660; &nbsp;MOVE<br>
-        A &nbsp;&nbsp;&nbsp;&nbsp;CHOOSE<br>
-        MENU &nbsp;BACK
-      </div><br>
+      <div class="v">TAP A SYSTEM<br>TO OPEN IT</div><br>
       <div class="v">EXIT RETURNS<br>TO THE TEMPAD</div>`;
   }
   else if (st.screen === "list" && st.confirm){
     /* ★ 지우기는 되돌릴 수 없습니다 (세이브까지 같이 사라집니다).
          그래서 목록을 감추고 이 화면만 보여줍니다.
          목록이 보이면 "어느 것을 지우는지" 헷갈립니다. */
+    const cold = (Date.now() - armAt) < ARM_MS;
     pg.innerHTML = `<h2>DELETE GAME?</h2>
       <div class="ask">
         <b>${esc(st.confirm.title)}</b>
-        <span class="warn">THIS ALSO DELETES<br>ITS SAVES. FOREVER.<br><br>
-        PRESS START TO DELETE.<br>ANY OTHER BUTTON KEEPS IT.</span>
+        <span class="warn">THIS ALSO DELETES ITS SAVES. FOREVER.</span>
+      </div>
+      <div class="ask2 ${cold?"cold":""}">
+        <div class="b keep" data-ask="keep">KEEP</div>
+        <div class="b del"  data-ask="del">DELETE</div>
       </div>`;
-    /* ★ 안전한 쪽(KEEP)을 맨 위에. 위험한 쪽은 맨 아래에.
-         그리고 지우는 건 A 가 아니라 START 입니다 — 위 onPress 참고. */
     inf.innerHTML = `<div class="h">DELETE?</div><hr>
-      <div class="v">
-        A &nbsp;&nbsp;&nbsp;&nbsp;KEEP IT<br>
-        B &nbsp;&nbsp;&nbsp;&nbsp;KEEP IT<br>
-        MENU &nbsp;KEEP IT<br>
-        <br>
-        START DELETE
-      </div>`;
+      <div class="v">TAP KEEP TO<br>GO BACK.<br><br>
+      NOTHING ELSE<br>DELETES IT.</div>`;
+    /* 잠깐 잠갔던 버튼을 제때 풀어줍니다 */
+    if (cold) setTimeout(() => { if (ui.state.confirm) draw(); }, ARM_MS);
   }
   else if (st.screen === "list"){
     const list = ui.list();
-    const canAdd = st.systemId === "gb";
-    pg.innerHTML = "<h2>" + esc(ui.systemName()) + "</h2>" + (list.length
-      ? list.map((r,i) =>
-          /* data-i 로 몇 번째 줄인지 붙여둡니다. 길게 누르기가 이걸 봅니다. */
-          `<div class="row ${i===st.cursor?"sel":""}" data-i="${i}">${esc(r.title)}<div class="sub">${
-            esc((r.hasSram?"SAVE ":"") + (r.states.some(Boolean)?"STATE ":"") + (r.note||""))
-          }</div><div class="hold"></div></div>`
-        ).join("")
-      : (canAdd
-          ? `<div class="empty">NO GAMES YET.<br><br>PRESS START TO ADD FILES.</div>`
-          : `<div class="empty">NOTHING HERE YET.</div>`));
-    /* ★ 파일을 받는 건 게임보이 목록뿐입니다.
-         게임&워치 목록은 저장소를 안 봐서, 거기서 받으면 "넣었다"고 해놓고
-         화면에는 아무것도 안 나옵니다. 그래서 안내조차 안 보여줍니다. */
+    pg.innerHTML = "<h2>" + esc(ui.systemName()) + "</h2>"
+      + `<div class="row add" data-add="1"><div class="t">+ ADD GAME</div></div>`
+      + (list.length
+        ? list.map((r,i) =>
+            /* data-i 로 몇 번째 줄인지 붙여둡니다. 길게 누르기가 이걸 봅니다. */
+            `<div class="row ${i===st.cursor?"sel":""}" data-i="${i}">
+               <div class="t">${esc(r.title)}</div>
+               <div class="sub">${esc((r.hasSram?"SAVE ":"")
+                 + (r.states.some(Boolean)?"STATE ":"") + (r.note||""))}</div>
+               <div class="hold"></div></div>`
+          ).join("")
+        : `<div class="empty">NO GAMES HERE YET.<br><br>TAP + ADD GAME.</div>`);
     inf.innerHTML = `<div class="h">${list.length} GAME${list.length===1?"":"S"}</div><hr>
       <div class="v">
-        &#9650;&#9660; &nbsp;MOVE<br>
-        A &nbsp;&nbsp;&nbsp;&nbsp;PLAY<br>` + (canAdd ? `
-        START ADD FILE<br>
-        SEL &nbsp;&nbsp;LIBRARY<br>` : ``) + `
-        MENU &nbsp;SYSTEM
-      </div>` + (canAdd ? `<br>
-      <div class="v">LIBRARY HAS<br>ADD &amp; REMOVE</div>` : ``);
-  }
-  else if (st.screen === "library"){
-    /* 넣기·폴더넣기·지우기를 한자리에. 버튼 넷으로는 다 못 걸어서입니다. */
-    const items = ui.libraryItems(CAN_DIR);
-    pg.innerHTML = `<h2>LIBRARY</h2>` + items.map((m,i) =>
-      `<div class="row one ${i===st.cursor?"sel":""}">${m.label}<span class="sub">${esc(m.sub)}</span></div>`
-    ).join("");
-    /* ★ 아이폰은 진짜 폴더 고르기가 안 되므로, 대신 무엇을 하면 되는지 씁니다 */
-    const folderNote = CAN_DIR
-      ? `<div class="v">ADD FOLDER TAKES<br>EVERY GAME INSIDE</div>`
-      : `<div class="v">THIS PHONE CANNOT<br>PICK A FOLDER.<br>
-           OPEN IT AND SELECT<br>ALL THE FILES.</div>`;
-    inf.innerHTML = `<div class="h">LIBRARY</div><hr>
-      <div class="v">
-        &#9650;&#9660; &nbsp;MOVE<br>
-        A &nbsp;&nbsp;&nbsp;&nbsp;CHOOSE<br>
-        MENU &nbsp;BACK
-      </div><br>` + folderNote;
+        TAP ONCE TO PICK<br>
+        TAP AGAIN TO PLAY<br><br>
+        HOLD A GAME<br>TO DELETE IT
+      </div>`;
   }
   else if (st.screen === "menu"){
     pg.innerHTML = `<h2>PAUSED</h2>` +
-      ui.menuItems().map((m,i) =>
-        `<div class="row one ${i===st.cursor?"sel":""}">${m.label}<span class="sub">${m.sub}</span></div>`
-      ).join("");
+      ui.menuItems().map((m,i) => {
+        const sel = i===st.cursor?"sel":"";
+        if (m.slot === undefined)
+          return `<div class="row one ${sel}" data-m="${i}">
+                    <div class="t">${m.label}</div><span class="sub">${m.sub}</span></div>`;
+        /* ★ 저장 칸은 줄마다 버튼 두 개. v1 처럼 A/START 에 걸지 않습니다. */
+        return `<div class="row one ${sel}" data-m="${i}">
+                  <div class="t">${m.label}</div><span class="sub">${m.sub}</span>
+                  <div class="mini" data-m="${i}" data-act="load">LOAD</div>
+                  <div class="mini" data-m="${i}" data-act="save">SAVE</div>
+                </div>`;
+      }).join("");
     inf.innerHTML = `<div class="h">${esc(st.title)}</div><hr>
       <div class="v">
-        &#9650;&#9660; &nbsp;MOVE<br>
-        A &nbsp;&nbsp;&nbsp;&nbsp;CHOOSE<br>
-        START SAVE SLOT<br>
-        MENU &nbsp;RESUME
+        TAP TO CHOOSE<br><br>
+        SLOTS KEEP THE<br>EXACT MOMENT
       </div>`;
   }
   else {
     inf.innerHTML = `<div class="h">${esc(st.title)}</div><hr>
       <div class="v">PLAYING</div><br>
-      <div class="v">MENU BUTTON<br>&nbsp;&nbsp;SAVE / QUIT</div>`;
+      <div class="v">MENU BUTTON<br>&nbsp;&nbsp;SAVE / QUIT</div><br>
+      <div class="v">PAD: SELECT<br>&nbsp;&nbsp;+ L + R</div>`;
   }
 
   /* ★ 고른 줄이 화면 밖으로 나가지 않게 따라갑니다.
@@ -518,18 +720,29 @@ function draw(){
   if (selEl && selEl.scrollIntoView) selEl.scrollIntoView({ block:"nearest" });
 }
 
-/* 라이브러리에서 고른 결과를 처리합니다.
-   ★ 폴더 고르기가 안 되는 기기(아이폰)에서는 파일 여러 개 고르기가 열립니다.
-     항목 자체는 없애지 않습니다 — 없으면 "내 폰엔 왜 없지" 가 됩니다. */
-function openLib(what){
-  if (what === "file")   $("file").click();
-  if (what === "folder") $(CAN_DIR ? "dir" : "file").click();
+/* ★★ 지금 눌려 있는 것을 전부 놓습니다 — 터치와 게임패드 **양쪽 다**. ★★
+
+   게임 중에 블루투스 패드로 오른쪽을 **누른 채** 화면의 MENU 를 누르면,
+   화면은 메뉴로 넘어갑니다. 그 뒤에 방향을 떼면 onPress 가
+   "게임 화면이 아니니 무시" 하고 **뗌을 버립니다.** 그러면 에뮬레이터에는
+   누름만 남아서, RESUME 했을 때 **손을 뗐는데 캐릭터가 계속 걸어갑니다.**
+   (2026-08-11 교차검사에서 재현해서 잡았습니다.)
+
+   그래서 화면을 옮기기 전에 눌린 것을 전부 놓아줍니다.
+   ★ onPress 가 아니라 GameMode.press 로 직접 보냅니다 — onPress 는
+     게임 화면이 아니면 뗌을 버리기 때문입니다.                          */
+function releaseAllInput(){
+  try { if (pad) pad.releaseAll(); } catch (e) {}
+  for (const n of gpPrev) { try { GameMode.press(n, false); } catch (e) {} }
+  gpPrev = []; gpMenu = false;
 }
 
-/* ══ 조작 ═════════════════════════════════════════════════════════════ */
+/* ══ 조작 (게임패드·키보드 보조 입력) ═════════════════════════════════
+   ★★ v2 — 게임 버튼은 게임에만 들어갑니다. ★★
+     목록과 메뉴는 손가락이 주인이고, 게임패드 십자키·A·B 는 거들기만 합니다.
+     SELECT·START 로는 메뉴에서 아무 일도 일어나지 않습니다.
+     지우기는 화면 버튼으로만 됩니다 — 되돌릴 수 없는 일이라 그렇습니다. */
 function onPress(name, down){
-  /* 게임 중에는 여덟 버튼을 전부 게임에 넘깁니다.
-     나가는 길은 MENU 버튼 하나뿐입니다. */
   if (ui.state.screen === "play"){ ui.press(name, down); return; }
 
   if (!down) return;                      /* 목록에서는 누를 때만 반응 */
@@ -538,59 +751,69 @@ function onPress(name, down){
   if (name === "down") { ui.move(1);  draw(); return; }
 
   if (st.screen === "system"){
-    /* ★ B 로는 안 나갑니다. 나가는 길은 MENU 버튼 → EXIT 하나뿐입니다. */
-    if (name === "A") ui.pickSystem(GameUi.SYSTEMS[st.cursor].id).then(draw);
-    return;
-  }
-  if (st.screen === "top"){
-    /* ★ A 로 고르기만. B 로는 나갈 수 없습니다 —
-         나가려면 EXIT 를 눈으로 보고 고르게 합니다. */
-    if (name === "A")      { ui.chooseTop(); draw(); }
-    else if (name === "B") { ui.closeTop(); draw(); }
+    if (name === "A") ui.pickSystem(ui.systems()[st.cursor].id).then(() => { lastFitKey=""; fit(); draw(); });
     return;
   }
   if (st.screen === "list"){
-    /* ★ 지울까 물어보는 중에는 버튼 뜻이 완전히 달라집니다.
-         A = 지운다, 나머지 전부 = 안 지운다.
-         "안 지운다" 쪽을 넓게 잡아둡니다 — 잘못 눌러서 지워지는 것보다
-         잘못 눌러서 안 지워지는 편이 백 배 낫습니다. */
-    /* ★★ 지우는 버튼은 A 가 아니라 START 입니다. ★★
-
-       목록에서 A 는 늘 "게임 시작" 이었습니다. 그 손버릇 그대로
-       확인창에서 A 를 누르면 게임이 사라집니다. 되돌릴 수 없습니다.
-       그래서 **평소에 안 쓰던 버튼**으로 옮겼습니다.
-       A·B·SELECT·MENU 는 전부 "안 지움" 입니다. 안전한 쪽을 넓게. */
     if (st.confirm){
-      /* ★ 창이 뜬 직후 잠깐은 아무것도 안 받습니다.
-           길게 누르던 손가락을 떼면서 다른 버튼이 같이 눌리는 걸 막습니다. */
+      /* ★ 패드로는 **안 지움** 만 됩니다. 지우기는 화면 버튼 전용입니다.
+           손에 쥔 패드를 아무렇게나 눌러 게임이 사라지면 안 됩니다. */
       if (Date.now() - armAt < ARM_MS) return;
-      if (name === "start") ui.confirmRemove().then(draw);
-      else                  { ui.cancelRemove(); draw(); }
+      ui.cancelRemove(); draw();
       return;
     }
-    if (name === "A")           ui.play().then(draw);
-    else if (name === "B")      { ui.backToSystem(); draw(); }
-    /* ★ 파일 받기는 게임보이 목록에서만. 게임&워치는 저장소를 안 봅니다. */
-    else if (st.systemId !== "gb") { /* 아무 일도 안 함 */ }
-    else if (name === "start")  $("file").click();       /* 지름길 */
-    else if (name === "select") { ui.openLibrary(); draw(); }
-    return;
-  }
-  if (st.screen === "library"){
-    if (name === "A")           { openLib(ui.chooseLibrary()); draw(); }
-    else if (name === "B")      { ui.closeLibrary(); draw(); }
+    if (name === "A")      ui.play().then(draw);
+    else if (name === "B") { ui.backToSystem(); draw(); }
     return;
   }
   if (st.screen === "menu"){
-    if (name === "A")           ui.chooseMenu().then(draw);
-    else if (name === "start")  ui.saveMenu().then(draw);   /* 칸에 저장 */
-    else if (name === "B")      { ui.closeMenu(); draw(); }
+    if (name === "A")      ui.chooseMenu("load").then(draw);
+    else if (name === "B") { ui.closeMenu(); draw(); }
     return;
   }
 }
 
 /* ══ 시작 ═════════════════════════════════════════════════════════════ */
-async function loadWasm(){
+/* 시스템에 맞는 에뮬레이터를 준비합니다.
+   ★ 게임보이와 컬러는 binjgb 하나가 둘 다 봅니다 (롬 헤더를 보고 스스로
+     컬러 모드로 갑니다). GBA 만 다른 코어입니다. */
+/* ★ GBA 코어는 **고른 순간에** 부릅니다 (파일이 1.7MB 쯤 됩니다).
+     파일이 없으면 조용히 실패하고, 화면에 "GBA EMULATOR NOT AVAILABLE" 이 뜹니다.
+     검은 화면보다 낫습니다.
+
+     ★ game/mgba.js 를 넣기만 하면 이 길이 그대로 살아납니다.
+       그 파일은 window.MgbaCore = { load() } 만 내놓으면 됩니다.
+       (load() 는 game.js 의 GameMode.registerCore("gba", SessionClass) 를
+        불러 코어를 등록하고, start 에 넘길 module 을 돌려줍니다.) */
+let mgbaLoading = null;
+function loadMgba(){
+  if (window.MgbaCore) return Promise.resolve();
+  if (mgbaLoading) return mgbaLoading;
+  mgbaLoading = new Promise((res, rej) => {
+    let done = false;
+    const finish = okNow => { if (done) return; done = true;
+                              okNow && window.MgbaCore ? res() : rej(new Error("no-mgba")); };
+    let s;
+    try { s = document.createElement("script"); } catch (e) { rej(new Error("no-mgba")); return; }
+    s.onload  = () => finish(true);
+    s.onerror = () => finish(false);
+    s.src = "mgba.js";
+    try { (document.body || document.documentElement).appendChild(s); }
+    catch (e) { finish(false); }
+  });
+  /* 실패했으면 다음에 다시 해볼 수 있게 풀어둡니다 */
+  mgbaLoading.catch(() => { mgbaLoading = null; });
+  return mgbaLoading;
+}
+
+async function loadCore(system){
+  if (system === "gba"){
+    if (mgbaMod) return mgbaMod;
+    await loadMgba();
+    if (!window.MgbaCore) throw new Error("no-mgba");
+    mgbaMod = await window.MgbaCore.load();
+    return mgbaMod;
+  }
   if (wasmMod) return wasmMod;
   if (typeof Binjgb !== "function") throw new Error("no-binjgb");
   wasmMod = await Binjgb();
@@ -630,14 +853,25 @@ function initFS(){
   applyFS(v);
 }
 
+/* 보기 설정 저장소 (컬러·조작판 토글) */
+const PREFS = {
+  get(k){ try { return localStorage.getItem("tempad.game." + k); } catch(e){ return null; } },
+  set(k,v){ try { localStorage.setItem("tempad.game." + k, v); } catch(e){} },
+};
+
 function boot(){
   ui = new GameUi.Ui({
     store: GameMode.RomStore,
     engine: GameMode,
     readFile: GameMode.readFile,
-    looksLikeGb: GameMode.looksLikeGb,
-    fetchRom, loadWasm,
+    detectSystem: GameMode.detectSystem,
+    fetchRom, loadCore,
     canvas: $("screen"),
+    prefs: PREFS,
+    /* ★ 화면 흐름 쪽이 **스스로 다시 그려야** 할 때가 있습니다.
+         3초짜리 타이머에서 오는 저장 실패 안내 같은 것입니다.
+         이게 없으면 안내를 세워놔도 아무도 안 그려서 영영 안 보입니다. */
+    redraw: () => { try { draw(); } catch (e) {} },
     /* ★ 나가기 전에 십자키를 놓고 에뮬레이터를 정리해야 합니다.
          전에는 여기서 곧장 주소만 바꿔서, 눌린 키와 돌던 게임이
          그대로 남은 채 페이지를 떠났습니다. */
@@ -661,19 +895,27 @@ function boot(){
   pad.attach($("padArea"), [
     [$("btnA"), "A"], [$("btnB"), "B"],
     [$("btnSel"), "select"], [$("btnSta"), "start"],
+    [$("btnL"), "L"], [$("btnR"), "R"],
   ]);
 
   /* 글자 크기 버튼 */
-  const hookFs = (id, delta) => {
-    const el = $(id);
-    el.addEventListener("pointerdown", e => { e.preventDefault(); el.classList.add("on"); });
-    ["pointerup","pointercancel","pointerleave"].forEach(t =>
-      el.addEventListener(t, () => el.classList.remove("on")));
-    el.addEventListener("click", () => applyFS(fsNow + delta));
-  };
-  hookFs("fsUp",  FS_STEP);
-  hookFs("fsDn", -FS_STEP);
+  onTap($("fsUp"), () => applyFS(fsNow + FS_STEP));
+  onTap($("fsDn"), () => applyFS(fsNow - FS_STEP));
   initFS();
+
+  /* ── ★ 구석 존 — 메뉴와 토글 ────────────────────────────────────────
+     ★ 이 셋은 게임에 아무 입력도 안 보냅니다. 완전히 독립입니다. */
+  onTap($("zMain"), async () => {
+    releaseAllInput();                    /* 눌린 채 남지 않게 (터치+패드) */
+    await ui.corner();
+    draw();
+  });
+  onTap($("zClr"), () => { ui.toggleColor(); draw(); });
+  onTap($("zPad"), () => {
+    ui.togglePad();
+    releaseAllInput();                    /* 숨기기 전에 눌린 것을 놓습니다 */
+    lastFitKey = ""; fit(); draw();
+  });
 
   /* ── 파일 / 폴더 받기 ────────────────────────────────────────────────
      둘 다 같은 곳으로 갑니다. 폴더를 고르면 그 안의 것이 전부 옵니다
@@ -689,7 +931,6 @@ function boot(){
     /* 여러 개일 때는 몇 개째인지 보여줍니다. 안 보이면 멈춘 줄 압니다. */
     let last = 0;
     await ui.addRoms(files, (now, total) => {
-      /* 너무 자주 그리면 오히려 느려집니다. 한 번에 한 개씩만. */
       if (now === total || now - last >= 1){
         last = now;
         $("note").textContent = `READING ${now} / ${total}`;
@@ -700,7 +941,10 @@ function boot(){
   $("file").addEventListener("change", e => takeFiles(e.target));
   $("dir") .addEventListener("change", e => takeFiles(e.target));
 
-  /* ── ★ 목록에서 손가락으로 고르기 / 길게 눌러 지우기 ──────────────────
+  /* 넣기 — 폴더가 되는 기기면 폴더, 아니면 파일 여러 개 */
+  function openAdd(){ $(CAN_DIR ? "dir" : "file").click(); }
+
+  /* ── ★★ 목록·메뉴를 손가락으로 ★★ ─────────────────────────────────
      줄은 그릴 때마다 새로 만들어지므로, 듣는 쪽은 #page 에 한 번만 답니다.
 
      짧게 누름 → 그 줄로 커서 이동. 이미 고른 줄이면 시작.
@@ -709,51 +953,81 @@ function boot(){
      [ 반드시 챙겨야 하는 것 ]
        · 손가락이 움직이면 취소 (스크롤하려던 것이지 지우려던 게 아님)
        · pointercancel 도 취소 (전화가 오면 옴)
-       · 길게 눌러 확인창이 뜬 뒤에는 손을 떼도 아무 일 없어야 함    */
+       · 길게 눌러 확인창이 뜬 뒤에는 손을 떼도 아무 일 없어야 함
+       · 두 번째 손가락이 첫 번째 상태를 덮어쓰면 안 됨 (pointerId 로 묶기) */
   /* ★ 600ms 는 너무 짧습니다.
        안드로이드가 "길게 누름" 으로 치는 기본값이 500ms, 아이폰도 0.5초입니다.
-       즉 600ms 는 **망설이는 탭**과 겨우 100ms 차이입니다.
-       줄 하나 고르려고 잠깐 멈칫한 것이 지우기 창을 띄웁니다. */
+       즉 600ms 는 **망설이는 탭**과 겨우 100ms 차이입니다. */
   const HOLD_MS = 900;
 
   let holdT = null, holdRow = null, holdI = -1, holdId = null,
-      holdX = 0, holdY = 0;
+      holdX = 0, holdY = 0, tapTarget = null;
 
   function cancelHold(){
     if (holdT) { clearTimeout(holdT); holdT = null; }
     if (holdRow) { holdRow.classList.remove("holding"); holdRow = null; }
     holdI = -1; holdId = null;
+    if (tapTarget) { tapTarget.classList.remove("press"); tapTarget = null; }
   }
   /* ★ draw() 가 줄을 통째로 새로 그리면 막대는 사라지는데 시계는 살아남습니다.
        그러면 아무 예고 없이 지우기 창이 튀어나옵니다. 같이 끄게 연결합니다. */
   holdCancel = cancelHold;
+
+  /* 눌린 자리에서 "무엇을 눌렀는지" 를 찾습니다.
+     ★ 안쪽 것을 먼저 봅니다 — LOAD/SAVE 는 메뉴 줄 **안에** 있습니다. */
+  function hit(e){
+    const t = e.target;
+    if (!t || !t.closest) return null;
+    const act  = t.closest("[data-act]");
+    if (act)  return { kind:"act",  el:act, i:Number(act.dataset.m), act:act.dataset.act };
+    const ask  = t.closest("[data-ask]");
+    if (ask)  return { kind:"ask",  el:ask, ask:ask.dataset.ask };
+    const add  = t.closest("[data-add]");
+    if (add)  return { kind:"add",  el:add };
+    const sys  = t.closest("[data-s]");
+    if (sys)  return { kind:"sys",  el:sys, id:sys.dataset.s };
+    const men  = t.closest("[data-m]");
+    if (men)  return { kind:"menu", el:men, i:Number(men.dataset.m) };
+    const row  = t.closest(".row[data-i]");
+    if (row)  return { kind:"row",  el:row, i:Number(row.dataset.i) };
+    return null;
+  }
 
   $("page").addEventListener("pointerdown", e => {
     /* ★ 이미 다른 손가락이 누르고 있으면 무시합니다.
          전에는 두 번째 손가락이 첫 번째의 상태를 덮어써서,
          빈 곳을 톡 쳤는데 게임이 켜지는 일이 있었습니다. */
     if (holdId !== null) return;
-    const st = ui.state;
-    if (st.screen !== "list" || st.confirm) return;
-    const row = e.target && e.target.closest && e.target.closest(".row[data-i]");
-    if (!row) return;
-    holdRow = row; holdI = Number(row.dataset.i); holdId = e.pointerId;
+    /* ★ 게임 중에는 목록이 숨겨져 있어서(display:none) 원래 여기까지 안 옵니다.
+         그래도 막아둡니다 — 어떤 브라우저가 숨긴 요소에 이벤트를 배달해도
+         게임 중에 파일창이 열리거나 목록으로 튕기는 일이 없게. */
+    if (ui.state.screen === "play") return;
+    const h = hit(e);
+    if (!h) return;
+    holdId = e.pointerId;
     holdX = e.clientX; holdY = e.clientY;
-    /* 막대가 차오르는 걸 보여줍니다 — 얼마나 더 눌러야 하는지 알게 */
-    row.classList.add("holding");
-    holdT = setTimeout(() => {
-      holdT = null;
-      const i = holdI;
-      cancelHold();
-      /* ★ 지울 수 있는 것일 때만 진동합니다.
-           기본 게임은 못 지우는데도 부르르 떨면, "떨렸으니 지워지는구나" 를
-           잘못 배웁니다. 그 학습이 나중에 확인창을 안 읽게 만듭니다. */
-      if (ui.askRemove(i)) {
-        armAt = Date.now();
-        try { if (navigator.vibrate) navigator.vibrate(15); } catch (err) {}
-      }
-      draw();
-    }, HOLD_MS);
+    tapTarget = h.el;
+    h.el.classList.add("press");
+
+    /* 게임 줄만 길게 눌러 지울 수 있습니다 */
+    if (h.kind === "row"){
+      holdRow = h.el; holdI = h.i;
+      /* 막대가 차오르는 걸 보여줍니다 — 얼마나 더 눌러야 하는지 알게 */
+      h.el.classList.add("holding");
+      holdT = setTimeout(() => {
+        holdT = null;
+        const i = holdI;
+        cancelHold();
+        /* ★ 지울 수 있는 것일 때만 진동합니다.
+             기본 게임은 못 지우는데도 부르르 떨면, "떨렸으니 지워지는구나" 를
+             잘못 배웁니다. 그 학습이 나중에 확인창을 안 읽게 만듭니다. */
+        if (ui.askRemove(i)) {
+          armAt = Date.now();
+          try { if (navigator.vibrate) navigator.vibrate(15); } catch (err) {}
+        }
+        draw();
+      }, HOLD_MS);
+    }
   }, { passive:true });
 
   $("page").addEventListener("pointermove", e => {
@@ -762,22 +1036,55 @@ function boot(){
     if (Math.abs(e.clientX - holdX) > 10 || Math.abs(e.clientY - holdY) > 10) cancelHold();
   }, { passive:true });
 
-  $("page").addEventListener("pointerup", e => {
+  $("page").addEventListener("pointerup", async e => {
     if (holdId === null || e.pointerId !== holdId) return;
-    const i = holdI;
+    const wasRow = holdI;
+    const target = tapTarget;
     cancelHold();
-    if (i < 0) return;                       /* 이미 확인창이 떴으면 끝 */
+    if (!target) return;
+    if (ui.state.screen === "play") return;   /* 게임 중에는 안 받습니다 */
+    /* 손을 뗀 자리가 누르기 시작한 자리와 다르면 취소입니다 */
+    const h = hit(e);
+    if (!h || h.el !== target) return;
+
     const st = ui.state;
-    if (st.screen !== "list" || st.confirm) return;
-    /* 고른 줄을 또 누르면 시작. 처음 누른 줄이면 고르기만. */
-    if (i === st.cursor) { ui.play().then(draw); }
-    else if (ui.setCursor(i)) draw();
+
+    if (h.kind === "ask"){
+      /* ★ 창이 뜬 직후 잠깐은 아무것도 안 받습니다.
+           길게 누르던 손가락을 떼면서 다른 버튼이 같이 눌리는 걸 막습니다. */
+      if (Date.now() - armAt < ARM_MS) return;
+      if (h.ask === "del") await ui.confirmRemove();
+      else                 ui.cancelRemove();
+      draw(); return;
+    }
+    if (st.confirm) return;               /* 확인 중에는 다른 건 안 받습니다 */
+
+    if (h.kind === "add"){ openAdd(); return; }
+    if (h.kind === "sys"){
+      await ui.pickSystem(h.id);
+      lastFitKey = ""; fit(); draw(); return;
+    }
+    if (h.kind === "act"){
+      await ui.tapMenu(h.i, h.act);
+      draw(); return;
+    }
+    if (h.kind === "menu"){
+      await ui.tapMenu(h.i, "load");
+      draw(); return;
+    }
+    if (h.kind === "row" && wasRow >= 0){
+      await ui.tapRow(wasRow);
+      draw(); return;
+    }
   }, { passive:true });
 
   /* ★ 전화·알림, 그리고 **스크롤이 시작될 때** 여기로 옵니다.
        iOS 사파리는 스크롤을 넘기는 순간 pointermove 를 끊고
        pointercancel 만 보냅니다. 위의 10px 판정은 거기서 안 돕니다. */
-  for (const t of ["pointercancel", "pointerleave"])
+  /* ★ lostpointercapture 도 듣습니다. 이게 없으면 어떤 사정으로 pointerup 이
+       유실됐을 때 holdId 가 영영 안 풀리고, 그러면 **#page 전체가 탭을
+       안 받습니다** (맨 위 "이미 다른 손가락이 있으면 무시" 때문에). */
+  for (const t of ["pointercancel", "pointerleave", "lostpointercapture"])
     $("page").addEventListener(t, e => {
       if (holdId !== null && e && e.pointerId !== undefined && e.pointerId !== holdId) return;
       cancelHold();
@@ -787,8 +1094,8 @@ function boot(){
   /* ── 템패드로 돌아가기 ────────────────────────────────────────────────
      ★ 나가기 전에 반드시 에뮬레이터를 정리합니다.
        페이지를 떠나면 어차피 다 사라지지만, 저장이 날아가지 않게
-       마지막 저장을 하고 나가야 합니다.                                */
-  /* ★ replace 를 씁니다. href 로 오가면 기록이 쌓여서
+       마지막 저장을 하고 나가야 합니다.
+     ★ replace 를 씁니다. href 로 오가면 기록이 쌓여서
        본체의 종료 버튼이 창을 못 닫게 됩니다. */
   function leave(){
     try { if (pad) pad.releaseAll(); } catch (e) {}
@@ -803,34 +1110,48 @@ function boot(){
 
      ★ 브라우저는 **버튼을 한 번 누르기 전까지** 패드를 안 알려줍니다
        (몰래 기기를 알아내는 걸 막으려고). 그래서 "연결됨" 이 늦게
-       뜨는 게 정상입니다. 아무 버튼이나 한 번 누르면 잡힙니다.       */
+       뜨는 게 정상입니다. 아무 버튼이나 한 번 누르면 잡힙니다.
+
+     ★★ v2 — MENU 는 **SELECT + L + R 을 한꺼번에** 눌러야 열립니다.
+       v1 은 L 이나 R 혼자였는데, GBA 는 L·R 이 진짜 게임 버튼이라
+       게임 중에 메뉴가 튀어나옵니다.                                  */
   function gpStop(){
     if (gpRaf) { cancelAnimationFrame(gpRaf); gpRaf = 0; }
-    /* 눌린 채로 남지 않게 전부 놓습니다 */
-    for (const n of gpPrev) { if (n !== "menu") onPress(n, false); }
-    gpPrev = [];
+    releaseAllInput();                    /* 눌린 채로 남지 않게 전부 놓습니다 */
   }
 
   function gpTick(){
     gpRaf = requestAnimationFrame(gpTick);
     let pads = [];
     try { pads = navigator.getGamepads ? navigator.getGamepads() : []; } catch (e) {}
-    const now = GamePad4.gamepadHeld(pads);
-    const changes = GamePad4.gamepadEdges(gpPrev, now);
-    gpPrev = now;
-    if (!changes.length) return;
+    const raw = GamePad4.gamepadHeld(pads);
+    /* 조합이 성립하면 SELECT·L·R 을 걷어냅니다 — 게임에 새어 들어가지 않게 */
+    const { held, menu } = GamePad4.gamepadResolve(raw);
+    const changes = GamePad4.gamepadEdges(gpPrev, held);
+    gpPrev = held;
 
     /* 첫 입력 때 소리를 깨웁니다 (아이폰은 손짓이 있어야 소리가 납니다) */
-    if (!gpSeen) { gpSeen = true; try { GameMode.wakeAudio(); } catch (e) {} }
-
-    for (const [name, down] of changes) {
-      /* L·R 은 화면의 MENU 버튼과 같습니다. 누를 때만 반응합니다. */
-      if (name === "menu") { if (down) { if (pad) pad.releaseAll(); ui.up().then(draw); } continue; }
-      onPress(name, down);
+    if (!gpSeen && (changes.length || menu)) {
+      gpSeen = true; try { GameMode.wakeAudio(); } catch (e) {}
     }
+
+    for (const [name, down] of changes) onPress(name, down);
+
+    /* 조합은 **누르는 순간 한 번만** 반응합니다 (누르고 있는 동안 계속 아님) */
+    if (menu && !gpMenu) {
+      /* ★ releaseAllInput 이 눌린 것을 에뮬레이터에 놓아주고 gpPrev 를 비웁니다.
+           비워도 됩니다 — 조합이 눌려 있는 동안은 gamepadResolve 가 셋을
+           걷어내므로 새 눌림이 안 생기고, 조합을 놓으면 menu 가 false 로
+           돌아가 다음에 다시 반응합니다. gpMenu 로 "한 번만" 을 지킵니다. */
+      releaseAllInput();
+      gpMenu = true;
+      ui.corner().then(draw);
+      return;
+    }
+    gpMenu = menu;
   }
 
-  function gpStart(){ if (!gpRaf) { gpPrev = []; gpTick(); } }
+  function gpStart(){ if (!gpRaf) { gpPrev = []; gpMenu = false; gpTick(); } }
 
   addEventListener("gamepadconnected", () => {
     $("diag").textContent = "GAMEPAD";
@@ -839,50 +1160,50 @@ function boot(){
   addEventListener("gamepaddisconnected", () => {
     let left = 0;
     try { for (const p of (navigator.getGamepads() || [])) if (p) left++; } catch (e) {}
-    if (!left) { gpStop(); scheduleFit(); }   /* scheduleFit 이 diag 글자를 되돌립니다 */
+    if (!left) { gpStop(); lastFitKey = ""; scheduleFit(); }
   });
   /* 페이지에 들어올 때 이미 꽂혀 있을 수 있습니다 */
   try {
     for (const p of (navigator.getGamepads ? navigator.getGamepads() : [])) if (p) { gpStart(); break; }
   } catch (e) {}
-  /* 다른 앱으로 가면 멈춥니다 — 안 그러면 배터리를 계속 먹습니다 */
+
+  /* 다른 앱으로 가면 멈추고 버튼을 전부 뗍니다.
+     안 그러면 배터리를 먹고, 돌아왔을 때 눌린 채로 남습니다. */
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") gpStop();
-    else {
+    if (document.visibilityState === "hidden") {
+      gpStop();
+      if (pad) pad.releaseAll();
+    } else {
       try {
         for (const p of (navigator.getGamepads ? navigator.getGamepads() : [])) if (p) { gpStart(); break; }
       } catch (e) {}
     }
   });
-  /* ★ $("back") 에는 아무것도 안 붙입니다.
-       십자키 옆이라 게임 중에 스쳐 눌리던 자리입니다. 이제 이름표일 뿐입니다. */
-
-  /* ★ 한 단계 위로. 게임 중이면 이게 유일한 탈출구입니다. */
-  $("btnUp").addEventListener("pointerdown", e => {
-    e.preventDefault();
-    $("btnUp").classList.add("on");
-    if (pad) pad.releaseAll();            /* 눌린 채 남지 않게 */
-  });
-  ["pointerup","pointercancel","pointerleave"].forEach(t =>
-    $("btnUp").addEventListener(t, () => $("btnUp").classList.remove("on")));
-  /* ★ 이 버튼은 페이지를 떠나지 않습니다. 화면 안에서만 한 단계 위로.
-       나가는 길은 왼쪽 아래 글자와 일시정지 메뉴의 EXIT 뿐입니다. */
-  $("btnUp").addEventListener("click", async () => { await ui.up(); draw(); });
 
   /* 폰의 뒤로가기로 나갈 때도 정리되게 */
   addEventListener("pagehide", () => {
     try { if (pad) pad.releaseAll(); } catch (e) {}
     try { GameMode.stop(); } catch (e) {}
   });
-
-  /* 다른 앱으로 가면 버튼을 전부 뗍니다.
-     안 그러면 돌아왔을 때 눌린 채로 남습니다. */
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden" && pad) pad.releaseAll();
-  });
   document.addEventListener("contextmenu", e => e.preventDefault());
 
-  /* binjgb 파일이 없으면 알려줍니다. 검은 화면보다 낫습니다. */
+  /* ── 오른쪽이 잘릴 때 조절 ───────────────────────────────────────────
+     폰마다 화면 크기 보고가 제각각이라 코드로는 못 맞춥니다.
+     ★ v2 — 하단 진단 글자를 길게 눌러서 합니다.
+       v1 은 START 를 길게 누르는 것이었는데, 그것도 게임 버튼에 메뉴
+       기능을 겹쳐 건 것이라 없앴습니다.                                */
+  let edgeT = null;
+  $("diag").addEventListener("pointerdown", () => {
+    edgeT = setTimeout(() => {
+      edgeRight = (edgeRight + 8) % 48;
+      lastFitKey = ""; fit();
+      $("note").textContent = "RIGHT EDGE " + edgeRight;
+    }, 900);
+  }, { passive:true });
+  for (const t of ["pointerup","pointercancel","pointerleave"])
+    $("diag").addEventListener(t, () => clearTimeout(edgeT), { passive:true });
+
+  /* 에뮬레이터 파일이 없으면 알려줍니다. 검은 화면보다 낫습니다. */
   if (typeof Binjgb !== "function"){
     ui.warn("EMULATOR FILES MISSING — SEE roms/ROMS.md");
   }
@@ -912,15 +1233,6 @@ if (window.visualViewport){
   visualViewport.addEventListener("scroll", scheduleFit);
 }
 boot(); fit(); setTimeout(fit, 200); setTimeout(fit, 700);
-
-/* 오른쪽이 잘리면 START 를 길게 눌러 조절합니다.
-   폰마다 화면 크기 보고가 제각각이라 코드로는 못 맞춥니다. */
-let holdT = null;
-$("btnSta").addEventListener("pointerdown", () => {
-  holdT = setTimeout(() => { edgeRight = (edgeRight + 8) % 48; lastFitKey = ""; fit(); }, 900);
-});
-["pointerup","pointercancel","pointerleave"].forEach(t =>
-  $("btnSta").addEventListener(t, () => clearTimeout(holdT)));
 </script>
 </body>
 </html>

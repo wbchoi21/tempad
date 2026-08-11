@@ -103,7 +103,13 @@ console.log("\n[1-5] ★★ 블루투스 게임패드");
   ok("왼쪽·위 버튼도 B (헷갈리지 말라고)", h([mkPad([2])])==="B" && h([mkPad([3])])==="B");
   ok("SELECT(8)", h([mkPad([8])])==="select");
   ok("START(9)",  h([mkPad([9])])==="start");
-  ok("★ L·R 은 MENU", h([mkPad([4])])==="menu" && h([mkPad([5])])==="menu");
+  /* ★★ v2 — 어깨 버튼은 이제 게임 입력입니다. ★★
+       v1 은 L 이나 R 혼자 누르면 MENU 였습니다. 게임보이에는 어깨 버튼이
+       없어서 그래도 됐지만, GBA 는 L·R 이 진짜 게임 버튼입니다.
+       그대로 두면 드리프트하려고 R 을 누른 순간 게임이 멈춥니다. */
+  ok("★ L(4) 은 게임 입력 L", h([mkPad([4])])==="L", h([mkPad([4])]));
+  ok("★ R(5) 은 게임 입력 R", h([mkPad([5])])==="R", h([mkPad([5])]));
+  ok("★ 어느 것도 menu 가 아님", !/menu/.test(h([mkPad([4,5])])), h([mkPad([4,5])]));
 
   /* 십자키 */
   ok("십자키 위(12)",   h([mkPad([12])])==="up");
@@ -254,6 +260,87 @@ console.log("\n[9] 화면에 붙였다 떼기");
   p.detach();
   ok("떼면 눌린 것도 풀림", p.held.length===0);
   ok("이벤트도 떨어짐", (evs["pointerdown"]||[]).length===0);
+}
+
+console.log("\n[10] ★★ v2 — MENU 는 SELECT + L + R 을 한꺼번에");
+{ const { gamepadResolve, gamepadEdges, MENU_COMBO } = P;
+  const r = h => gamepadResolve(h);
+
+  ok("(준비) 조합이 셋", MENU_COMBO.length===3);
+  ok("아무것도 아니면 그대로", r(["A","up"]).menu===false && r(["A","up"]).held.join(",")==="A,up");
+
+  /* 하나씩만 눌러서는 절대 안 열려야 합니다 — 이게 v1 의 문제였습니다 */
+  ok("★ SELECT 혼자로는 안 열림", r(["select"]).menu===false);
+  ok("★ L 혼자로는 안 열림",      r(["L"]).menu===false);
+  ok("★ R 혼자로는 안 열림",      r(["R"]).menu===false);
+  ok("★ L+R 둘로도 안 열림",      r(["L","R"]).menu===false);
+  ok("★ SELECT+L 로도 안 열림",   r(["select","L"]).menu===false);
+  ok("★★ 셋을 다 눌러야 열림",    r(["L","R","select"]).menu===true);
+  ok("차례가 달라도 열림",        r(["select","R","L"]).menu===true);
+
+  /* ★ 조합이 성립하면 그 셋은 **게임에 안 들어가야** 합니다.
+       안 그러면 메뉴를 열면서 게임에도 SELECT·L·R 이 들어가서,
+       돌아왔을 때 캐릭터가 엉뚱한 짓을 하고 있습니다. */
+  const got = r(["A","L","R","select","up"]);
+  ok("★★ 조합에 쓰인 셋은 걷어냄", got.held.join(",")==="A,up", got.held.join(","));
+  ok("★ 나머지 게임 입력은 그대로 감", got.held.indexOf("A")>=0 && got.held.indexOf("up")>=0);
+
+  /* ★ 조합을 만들어 가는 도중에 눌렸던 것은 제대로 놓여야 합니다.
+       (SELECT 를 먼저 눌렀다가 L·R 을 마저 누르는 실제 손동작) */
+  let prev = [];
+  const step = held => { const x=r(held); const e=gamepadEdges(prev, x.held); prev=x.held; return {e, menu:x.menu}; };
+  let s = step(["select"]);
+  ok("SELECT 혼자는 게임 입력이 맞음", JSON.stringify(s.e)==='[["select",true]]', JSON.stringify(s.e));
+
+  /* ★★★ 여기가 이번 세션에서 두 번 뒤집은 부분입니다. ★★★
+
+     사람은 세 버튼을 16ms 안에 동시에 못 누릅니다. SELECT → L → R 로
+     누르면 그 사이 프레임의 SELECT·L 이 게임으로 들어갑니다.
+     그래서 한때 "조합을 만드는 중"(SELECT + 어깨)도 걷어냈습니다.
+
+     ★ 그런데 그게 더 나빴습니다 —
+       어깨 버튼에 손가락을 얹어둔 동안 **SELECT 가 통째로 죽습니다.**
+       게임보이·컬러에는 어깨 버튼이 아예 없어서 거기 손가락을 얹기 쉬운데,
+       그러면 SELECT 가 아무 반응이 없습니다. 화면에 표시도 없습니다.
+
+     그래서 되돌렸습니다. **조용히 계속 죽는 입력**보다
+     **메뉴 열 때 한 번 스치는 입력**이 낫다고 판단했습니다.
+     아래 검사는 그 판단을 못 박아 둡니다 — 나중에 누가 다시 뒤집으려 하면
+     여기 적힌 이유를 먼저 읽게 됩니다.                                  */
+  s = step(["select","L"]);
+  ok("★★★ 어깨를 얹고 있어도 SELECT 를 안 잡아먹음",
+     !/\["select",false\]/.test(JSON.stringify(s.e)), JSON.stringify(s.e));
+  ok("★ L 은 게임 입력으로 감 (GBA 에서 진짜 버튼)",
+     JSON.stringify(s.e)==='[["L",true]]', JSON.stringify(s.e));
+  ok("아직 메뉴는 아님", s.menu===false);
+
+  s = step(["select","L","R"]);
+  ok("★★ R 까지 누르면 메뉴가 열림", s.menu===true);
+  ok("★★ 그 순간 눌려 있던 것들이 게임에서 놓임 (눌린 채 안 남게)",
+     s.e.length===2 && s.e.every(([n,d])=>d===false && (n==="select"||n==="L")),
+     JSON.stringify(s.e));
+
+  s = step([]);
+  ok("손을 다 떼면 메뉴 신호도 꺼짐", s.menu===false);
+  ok("★★ 눌린 채 남는 것이 하나도 없음", s.e.length===0, JSON.stringify(s.e));
+
+  /* ★ 조합을 만들다 만 경우 — 눌린 채 남으면 안 됩니다 */
+  prev=[];
+  s = step(["select"]);
+  s = step(["select","R"]);
+  s = step([]);
+  ok("★★ 만들다 말아도 전부 놓임",
+     JSON.stringify(s.e.map(x=>x[1]))==="[false,false]", JSON.stringify(s.e));
+
+  /* ★ L+R 만 쥔 것은 진짜 게임 조작이라 그대로 통과해야 합니다 */
+  prev=[];
+  s = step(["L","R"]);
+  ok("★★ L+R 둘만은 게임 조작 그대로", s.menu===false
+     && /\["L",true\]/.test(JSON.stringify(s.e)) && /\["R",true\]/.test(JSON.stringify(s.e)),
+     JSON.stringify(s.e));
+  ok("★ 그것만으로는 메뉴가 안 열림", s.menu===false);
+
+  ok("빈 것도 안 터짐", r([]).menu===false && r(null).held.length===0);
 }
 
 console.log(`\n${"=".repeat(46)}\n통과 ${pass}  실패 ${fail}\n`);

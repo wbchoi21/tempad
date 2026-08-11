@@ -9,6 +9,7 @@
 "use strict";
 const path = require("path");
 const UI = path.join(__dirname, "..", "ui.js");
+const GM = require(path.join(__dirname, "..", "game.js"));
 
 let pass = 0, fail = 0;
 const ok = (n, c, x) => {
@@ -39,6 +40,7 @@ function fresh(opt = {}) {
     async list() {
       return [...db.values()].map(r => ({
         id:r.id, title:r.title, file:r.file, fromBundled:r.fromBundled||null, size:r.size,
+        system:r.system||"gb",
         hasSram:!!r.sram, states:(r.states||[null,null,null]).map(x => !!x),
         played:r.played||0, added:r.added||0 }));
     },
@@ -55,6 +57,7 @@ function fresh(opt = {}) {
       const rec = { id, title:(name||"").replace(/\.[^.]*$/, "").toUpperCase(),
                     file:name, size:bytes.length, rom:bytes,
                     fromBundled:(extra && extra.fromBundled) || null,
+                    system:(extra && extra.system) || GM.detectSystem(bytes) || "gb",
                     sram: old ? old.sram : null,
                     states: old ? old.states : [null,null,null],
                     played: old ? old.played : 0, added: old ? old.added : Date.now() };
@@ -82,13 +85,11 @@ function fresh(opt = {}) {
   const ui = new Ui({
     store, engine,
     readFile: async f => { if (opt.readFails) throw new Error("io"); return f.bytes; },
-    looksLikeGb: b => {
-      if (!b || b.length < 0x150) return false;
-      for (let i = 0; i < LOGO.length; i++) if (b[0x104 + i] !== LOGO[i]) return false;
-      return true;
-    },
+    /* ★ v2 — 가짜 판별기가 아니라 **진짜 game.js 의 것**을 물립니다.
+         가짜를 끼우면 "가짜가 통과했다" 만 확인하게 됩니다. */
+    detectSystem: GM.detectSystem,
     fetchRom: async () => new Uint8Array(0x8000),
-    loadWasm: async () => ({}),
+    loadCore: async () => ({}),
     canvas: null,
   });
   ui._reset();
@@ -113,7 +114,10 @@ async function main() {
     ]);
     ok("셋 다 들어감", r.added === 3, JSON.stringify(r));
     ok("저장소에 셋", t.db.size === 3, t.db.size);
-    ok("목록에 기본5 + 새로3", t.ui.state.count === 8, t.ui.state.count);
+    /* ★ 기본 게임 5개 중 GB 목록에 뜨는 것은 3개입니다 (나머지 2개는 컬러 겸용).
+       ★ c.gbc 는 **이름만** .gbc 이고 내용은 게임보이 롬입니다(romFile 이 그렇게 만듭니다).
+         이름이 아니라 내용을 보므로 셋 다 GB 목록으로 옵니다 — 그게 핵심입니다. */
+    ok("목록에 기본3 + 새로3", t.ui.state.count === 6, t.ui.state.count);
   }
 
   /* ★ 폴더를 고르면 롬이 아닌 것이 잔뜩 딸려옵니다. 이게 핵심입니다. */
@@ -253,7 +257,7 @@ async function main() {
       ok("이상한 입력에 안 터짐: " + JSON.stringify(bad), !threw);
     }
     ok("롬이 하나도 없으면 그렇게 알려줌",
-       /NO \.GB FILES/.test(t.ui.state.notice), t.ui.state.notice);
+       /NO GAME FILES/.test(t.ui.state.notice), t.ui.state.notice);
   }
 
   /* ★ 진행 상황을 알려줘야 합니다 (200개 넣는 동안 멈춘 줄 알면 안 됩니다) */
@@ -292,9 +296,13 @@ async function main() {
     ok("남의 롬이 들어감", r.added === names.length, JSON.stringify(r));
 
     const list = t.ui.list();
+    /* ★ 지금 목록(게임보이)에 뜨는 기본 게임만 봅니다.
+         컬러 겸용 2개(tobudx/libbet)는 GBC 목록에 있으니 여기엔 없는 게 맞습니다. */
+    const hereBundled = BUNDLED.filter(b => b.system === "gb");
     ok("★ 기본 게임이 그대로 다 남아있음",
-       BUNDLED.every(b => list.some(x => x.bundled && x.file === b.file)),
+       hereBundled.every(b => list.some(x => x.bundled && x.file === b.file)),
        list.filter(x => x.bundled).map(x => x.file).join(","));
+    /* 넣은 5개 중 이름이 컬러 겸용인 2개는 내용이 gb 라 전부 GB 목록으로 옵니다 */
     ok("★ 목록이 기본 + 새것 만큼 늘어남", list.length === before + names.length, list.length);
 
     /* 이름표를 훔치지 않았는지 */
@@ -322,19 +330,37 @@ async function main() {
        now.title + " / " + now.note);
   }
 
-  /* ═══ 1-3. ★ 게임&워치 목록에서는 받지 않습니다 ══════════════════════
-     그쪽 목록은 저장소를 아예 안 봅니다. 거기서 받으면
-     "300개 넣었다"고 말해놓고 빈 화면을 보여줍니다.
+  /* ═══ 1-3. ★★ v2 — 어느 목록에서 넣든 제 시스템으로 갑니다 ═══════════
+
+     v1 은 "게임보이 목록에서만 받음" 이었습니다. 그때는 다른 목록이
+     게임&워치(저장소를 아예 안 보는 화면) 뿐이라, 거기서 받으면
+     "300개 넣었다"고 말해놓고 빈 화면을 보여줬기 때문입니다.
+
+     v2 는 시스템이 셋이고 셋 다 저장소를 봅니다. 그래서 막을 이유가
+     없어졌고, 오히려 **막으면** 아드님이 목록을 옮겨 다니며 넣어야 합니다.
+     대신 어디로 갔는지 반드시 말해줘야 합니다 — 안 그러면
+     "넣었는데 목록에 없다" 가 됩니다. 그걸 여기서 봅니다.
      ================================================================== */
-  console.log("\n[1-3] ★ 게임&워치 목록에서는 안 받음");
+  console.log("\n[1-3] ★ 어느 목록에서 넣어도 제 시스템으로 감");
   {
     const t = await atList();
-    await t.ui.pickSystem("gw");
+    await t.ui.pickSystem("gba");                 /* GBA 목록에 서서 */
     const r = await t.ui.addRoms([romFile("a.gb",1), romFile("b.gb",2)]);
-    ok("★ 하나도 안 들어감", r.added === 0 && t.db.size === 0, JSON.stringify(r));
-    ok("왜 안 되는지 알려줌", /GAME BOY LIST ONLY/.test(t.ui.state.notice), t.ui.state.notice);
-    ok("★ 파일 하나도 마찬가지", (await t.ui.addRom(romFile("c.gb",3))) === null);
-    ok("저장소는 여전히 비어있음", t.db.size === 0, t.db.size);
+    ok("★ 게임보이 롬 둘이 들어감", r.added === 2 && t.db.size === 2, JSON.stringify(r));
+    ok("★ 지금 목록에는 안 보임", t.ui.state.count === 0, t.ui.state.count);
+    ok("★ 다른 데로 갔다고 알려줌", r.elsewhere === 2 && /IN OTHER SYSTEMS/.test(t.ui.state.notice),
+       t.ui.state.notice);
+    await t.ui.pickSystem("gb");
+    ok("★ 게임보이 목록에 가면 있음", t.ui.state.count === 5, t.ui.state.count);
+
+    /* 파일 하나짜리도 마찬가지 */
+    const t2 = await atList();
+    await t2.ui.pickSystem("gba");
+    const rec = await t2.ui.addRom(romFile("c.gb",3));
+    ok("★ 파일 하나도 받아줌", rec !== null && rec.system === "gb", rec && rec.system);
+    ok("★ 어디로 갔는지 콕 집어 말함", /ADDED TO GAME BOY/.test(t2.ui.state.notice),
+       t2.ui.state.notice);
+    ok("★ 저장은 됐음", t2.db.size === 1, t2.db.size);
   }
 
 
@@ -361,7 +387,7 @@ async function main() {
     ok("물어보는 중엔 손가락으로도 못 옮김", t.ui.setCursor(0) === false);
     ok("물어보는 중엔 시작 안 됨", (await t.ui.play()) === false);
     ok("물어보는 중엔 파일도 안 받음", (await t.ui.addRom(romFile("z.gb",9))) === null);
-    ok("버튼 글자가 KEEP 으로 바뀜", t.ui.upLabel() === "KEEP", t.ui.upLabel());
+    ok("버튼 글자가 KEEP 으로 바뀜", t.ui.cornerLabel() === "KEEP", t.ui.cornerLabel());
 
     /* 취소 */
     ok("취소됨", t.ui.cancelRemove());
@@ -410,7 +436,7 @@ async function main() {
     await t.ui.addRoms([romFile("a.gb",1)]);
     const mine = t.ui.list().findIndex(r => !r.bundled);
     t.ui.askRemove(mine);
-    const to = await t.ui.up();
+    const to = await t.ui.corner();
     ok("위로 누르면 취소만 됨", to === "list" && t.ui.state.confirm === null, to);
     ok("화면을 안 떠남", t.ui.state.screen === "list", t.ui.state.screen);
     ok("아무것도 안 지워짐", t.db.size === 1, t.db.size);
@@ -470,8 +496,8 @@ async function main() {
     await p;
     ok("★ 게임이 켜짐", t.ui.state.screen === "play", t.ui.state.screen);
     ok("★★ 물음표가 남아있지 않음", t.ui.state.confirm === null);
-    ok("★★ MENU 버튼이 제 글자로 돌아옴", t.ui.upLabel() === "MENU", t.ui.upLabel());
-    const to = await t.ui.up();
+    ok("★★ MENU 버튼이 제 글자로 돌아옴", t.ui.cornerLabel() === "MENU", t.ui.cornerLabel());
+    const to = await t.ui.corner();
     ok("★★ MENU 버튼이 실제로 먹힘", to === "menu" && t.ui.state.screen === "menu",
        to + "/" + t.ui.state.screen);
     ok("아무것도 안 지워짐", t.db.size === 1, t.db.size);
@@ -486,7 +512,7 @@ async function main() {
     ok("(준비) 게임 중", t.ui.state.screen === "play");
     ok("★ 게임 중에는 길게 눌러도 안 물어봄", t.ui.askRemove(0) === false);
     ok("물음표 없음", t.ui.state.confirm === null);
-    ok("MENU 글자 그대로", t.ui.upLabel() === "MENU", t.ui.upLabel());
+    ok("MENU 글자 그대로", t.ui.cornerLabel() === "MENU", t.ui.cornerLabel());
   }
 
   /* ★ 손가락으로 줄 고르기 */

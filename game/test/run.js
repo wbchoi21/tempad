@@ -16,14 +16,20 @@ function fresh(opt){
   return { dom, G, mod, rom };
 }
 
+(async () => {
 console.log("\n[1] 색 바꾸기");
 { const {G}=fresh();
-  const d=new Uint8Array([0,0,0,255, 70,70,70,255, 140,140,140,255, 255,255,255,255]);
+  /* ★ 알파를 **0 으로 시작**합니다. createImageData 가 실제로 그렇습니다.
+       예전에는 입력 알파가 이미 255 라, "알파를 255 로 못 박는다" 는 단언이
+       **코드를 빼도 통과했습니다.** (2026-08-11 교차검사에서 실증) */
+  const d=new Uint8Array([0,0,0,0, 70,70,70,0, 140,140,140,0, 255,255,255,0]);
   G.tintOrange(d);
   ok("가장 어두운 → #040506", d[0]===4&&d[1]===5&&d[2]===6);
   ok("가장 밝은 → #F8861E", d[12]===248&&d[13]===134&&d[14]===30);
   ok("4단계로만 나옴", new Set([d[0],d[4],d[8],d[12]]).size===4);
-  ok("투명도는 안 건드림", d[3]===255);
+  ok("★★ 투명도를 255 로 못 박음 (0 으로 시작해도)",
+     d[3]===255 && d[7]===255 && d[11]===255 && d[15]===255,
+     [d[3],d[7],d[11],d[15]].join(","));
 }
 
 console.log("\n[2] 롬 제목 읽기");
@@ -132,6 +138,32 @@ console.log("\n[7] 배터리 세이브 (게임 자체 저장)");
   ok("★ 나가기 전에 마지막 저장", saved!==null, "이게 없으면 진행이 날아감");
 }
 
+console.log("\n[7-2] ★★★ 배터리 세이브가 실패하면 다시 시도해야 함");
+{ /* 저장공간이 차면 게임 안의 "리포트" 가 아무 말 없이 영영 사라졌습니다.
+     sramDirty 를 쓰기 **전에** 꺼버리고 실패를 흘렸기 때문입니다.
+     이제 실패하면 표시를 되살려 3초 뒤에 다시 시도합니다.
+     (2026-08-11 교차검사에서 잡았습니다.) */
+  const {dom,G,mod,rom}=fresh();
+  let tries=0, fail=true;
+  const s=G.start(mod,rom,{ onSram: async () => { tries++; if(fail) throw new Error("full"); } });
+
+  mod._setSramDirty(true); dom.tick(16);
+  ok("(준비) 게임이 저장한 걸 감지", s.sramDirty===true);
+  s.flushSram();
+  await new Promise(r=>setTimeout(r,5));          /* 거절이 도착할 틈 */
+  ok("★ 한 번 시도했음", tries===1, tries);
+  ok("★★★ 실패했으니 표시가 되살아남 (다음에 다시 시도)", s.sramDirty===true,
+     "false 면 그 저장은 영영 사라집니다");
+
+  /* 저장공간이 생기면 다음 시도에서 성공해야 합니다 */
+  fail=false;
+  s.flushSram();
+  await new Promise(r=>setTimeout(r,5));
+  ok("★★ 두 번째 시도에서 저장됨", tries===2, tries);
+  ok("★ 성공했으면 표시가 꺼짐", s.sramDirty===false);
+  G.stop();
+}
+
 console.log("\n[8] 세이브 스테이트");
 { const {G,mod,rom}=fresh();
   G.start(mod,rom,{});
@@ -139,7 +171,10 @@ console.log("\n[8] 세이브 스테이트");
   ok("바이트 배열이 나옴", st instanceof Uint8Array && st.length===64, st?st.length:"null");
   ok("크기 맞으면 불러와짐", G.loadState(st)===true);
   ok("크기 다르면 거부", G.loadState(new Uint8Array(3))===false);
-  ok("메모리 누수 없음(FileData 삭제)", F.log.filter(x=>x==="filedata.delete").length>=3);
+  /* ★ 하한선(>=3)이면 세 곳 중 두 곳을 빼도 통과합니다. 정확한 개수로 봅니다.
+       여기까지 온 것: saveState 1회 + loadState 2회 = 3회 */
+  ok("★ FileData 를 정확히 3번 지움", F.log.filter(x=>x==="filedata.delete").length===3,
+     F.log.filter(x=>x==="filedata.delete").length);
   G.stop();
   ok("게임 없으면 null", G.saveState()===null);
 }
@@ -150,8 +185,10 @@ console.log("\n[9] 버튼");
   G.press("up",true); G.press("A",true); G.press("up",false);
   ok("누름이 전달됨", F.log.includes("joyp.up=1")&&F.log.includes("joyp.A=1"));
   ok("뗌도 전달됨", F.log.includes("joyp.up=0"));
+  /* ★ 예전에는 `ok("...", true)` 였습니다. 글자 그대로 참이라 아무것도 안 봅니다. */
+  const before=F.log.length;
   G.press("없는버튼",true);
-  ok("없는 버튼은 무시", true);
+  ok("★ 없는 버튼은 아무 일도 안 함", F.log.length===before, F.log.slice(before).join(","));
   G.stop();
   const n=F.log.length; G.press("down",true);
   ok("★ 끝난 뒤 누르면 무시", F.log.length===n, "죽은 에뮬을 건드리면 터짐");
@@ -205,5 +242,133 @@ console.log("\n[10] 나쁜 롬");
   ok("게임이 남아있지 않음", G.current()===null||G.current().dead);
 }
 
+console.log("\n[12] ★★ 일부러 끈 것과 사고로 사라진 것을 구분하는가");
+{ /* 평범하게 CHANGE GAME 을 눌렀을 뿐인데 화면에 "GAME STOPPED" 라는
+     사고 안내가 뜨고 quit() 이 두 번 돌았습니다.
+     (2026-08-11 교차검사에서 재현해서 잡았습니다.) */
+  const {G,mod,rom}=fresh();
+  let gone=0;
+  G.setOnGone(()=>gone++);
+
+  G.start(mod,rom,{});
+  ok("(준비) 돌고 있음", G.isRunning());
+  G.stop();                                  /* ← 일부러 끔 (목록으로 나가기) */
+  ok("★ 멈추긴 함", !G.isRunning());
+  ok("★★★ 일부러 껐을 때는 사고 안내가 안 뜸", gone===0, "onGone "+gone+"회");
+
+  /* 사고로 사라진 경우(페이지를 떠남·얼어붙음)는 반드시 알려야 합니다 —
+     안 알리면 "PLAYING" 이라 적힌 멈춘 화면에 갇힙니다. */
+  G.start(mod,rom,{});
+  G._guards.hardStop();                      /* ← 사고 */
+  ok("★★★ 사고로 사라졌을 때는 알려줌", gone===1, "onGone "+gone+"회");
+  G.setOnGone(null);
+}
+
+console.log("\n[13] ★★ 메뉴를 열어둔 채 폰을 껐다 켜면 — 게임이 몰래 다시 돌면 안 됨");
+{ const {dom,G,mod,rom}=fresh();
+  G.start(mod,rom,{});
+  ok("(준비) 돌고 있음", G.isRunning());
+
+  G.pause();                                  /* ← 아드님이 메뉴를 엶 */
+  ok("메뉴를 열면 멈춤", !G.isRunning());
+
+  /* 폰 화면을 껐다 켭니다 */
+  dom.fire("visibilitychange");               /* visible 그대로여도 한 번 */
+  global.document.visibilityState="hidden";
+  G._guards.onVisibility();
+  global.document.visibilityState="visible";
+  G._guards.onVisibility();
+  ok("★★★ 메뉴 때문에 멈춘 것은 그대로 멈춰 있음", !G.isRunning(),
+     "다시 돌면 메뉴 뒤에서 게임이 돌고 소리가 납니다");
+
+  /* RESUME 을 누르면 당연히 다시 돌아야 합니다 (긍정형 대조군) */
+  G.resume();
+  ok("★★ RESUME 을 누르면 다시 돎", G.isRunning());
+
+  /* 반대로 **백그라운드 때문에** 멈춘 것은 돌아오면 다시 돌아야 합니다 */
+  global.document.visibilityState="hidden";
+  G._guards.onVisibility();
+  ok("다른 앱으로 가면 멈춤", !G.isRunning());
+  global.document.visibilityState="visible";
+  G._guards.onVisibility();
+  ok("★★ 돌아오면 저절로 다시 돎", G.isRunning());
+  G.stop();
+}
+
+console.log("\n[14] ★ GBA 롬 알아보기");
+{ const {G}=fresh();
+  const gbaLogo=[0x24,0xFF,0xAE,0x51,0x69,0x9A,0xA2,0x21,0x3D,0x84,0x82,0x0A,0x84,0xE4,0x09,0xAD,
+                 0x11,0x24,0x8B,0x98,0xC0,0x81,0x7F,0x21,0xA3,0x52,0xBE,0x19,0x93,0x09,0xCE,0x20];
+  const mk=(o={})=>{ const b=new Uint8Array(0x1000);
+    if(o.fixed!==false) b[0xB2]=0x96;
+    if(o.logo!==false) gbaLogo.forEach((v,i)=>b[0x04+i]=v);
+    if(o.title) for(let i=0;i<o.title.length;i++) b[0xA0+i]=o.title.charCodeAt(i);
+    if(o.checksum){ let c=0; for(let i=0xA0;i<=0xBC;i++) c=(c-b[i])&0xFF; b[0xBD]=(c-0x19)&0xFF; }
+    return b; };
+
+  ok("★ 로고가 맞으면 GBA", G.detectSystem(mk())==="gba");
+  ok("★ 체크섬만 맞아도 GBA", G.detectSystem(mk({logo:false,checksum:true}))==="gba");
+  /* ★★ 여기가 핵심입니다 — 0xB2 한 바이트만으로는 안 됩니다.
+         전에는 이것 때문에 사진 파일이 "PHOTO" 라는 GBA 게임이 됐습니다. */
+  ok("★★★ 0x96 한 바이트만으로는 GBA 가 아님",
+     G.detectSystem(mk({logo:false}))===null, G.detectSystem(mk({logo:false})));
+  ok("★ 0x96 도 없으면 당연히 아님", G.detectSystem(mk({fixed:false,logo:false}))===null);
+  ok("★ 너무 짧으면 아님", G.detectSystem(new Uint8Array(0x80))===null);
+
+  /* ★ GBA 는 제목이 0xA0 에 있습니다. 게임보이 자리를 읽으면 쓰레기가 나옵니다. */
+  ok("★★ GBA 제목을 제자리에서 읽음",
+     G.romTitle(mk({title:"POKEMON EMER"}))==="POKEMON EMER",
+     G.romTitle(mk({title:"POKEMON EMER"})));
+  ok("★ 제목이 없으면 파일 이름을 씀",
+     G.romTitle(mk(), "ruby.gba")==="RUBY", G.romTitle(mk(),"ruby.gba"));
+  /* 게임보이 롬은 여전히 게임보이 자리에서 읽어야 합니다 */
+  const gb=new Uint8Array(0x8000);
+  [0xCE,0xED,0x66,0x66,0xCC,0x0D,0x00,0x0B,0x03,0x73,0x00,0x83,0x00,0x0C,0x00,0x0D]
+    .forEach((v,i)=>gb[0x104+i]=v);
+  "TETRIS".split("").forEach((c,i)=>gb[0x134+i]=c.charCodeAt(0));
+  ok("★ 게임보이 제목은 그대로", G.romTitle(gb)==="TETRIS", G.romTitle(gb));
+}
+
+console.log("\n[11] ★★★ 저장을 300번 반복해도 메모리가 안 새는가");
+{ /* 이 프로젝트에서 제일 비싸게 배운 버그입니다.
+     `_file_data_delete` 는 **속에 든 자료만** 돌려주고 껍데기(16바이트)는
+     남깁니다. `_free(ptr)` 를 따로 안 부르면 한 번 저장할 때마다 껍데기가
+     쌓이고, 그 껍데기가 돌려준 195KB 자리를 가로막습니다.
+     binjgb 는 메모리를 못 늘리게 지어져 있어서, 16MB 를 다 쓰면
+     **에뮬레이터가 영구히 멈춥니다. 실제로 저장 71번째에 죽었습니다.**
+
+     ★ 2026-08-11 방해검사에서 알게 된 것 —
+       예전 가짜는 껍데기를 추적하지 않아서, `_free` 를 통째로 빼도
+       검사가 전부 통과했습니다. **이 버그를 아무도 안 보고 있었습니다.**
+       가짜를 고치고 이 검사를 새로 넣었습니다. */
+  const {G,mod,rom}=fresh();
+  G.start(mod,rom,{});
+  const base = mod._alive.size;
+  ok("(준비) 게임이 떠 있음", base>0, base);
+
+  for(let i=0;i<300;i++){
+    const s = G.saveState();
+    if(!s){ ok("저장이 됨", false, i+"번째에서 실패"); break; }
+    G.loadState(s);
+  }
+  ok("★★★ 300번 저장·불러오기 뒤에도 메모리가 안 늘어남",
+     mod._alive.size===base, base+" → "+mod._alive.size);
+
+  /* 배터리 세이브도 같은 구조입니다 */
+  for(let i=0;i<300;i++){ mod._setSramDirty(true); G.flushSram(); }
+  ok("★★★ 배터리 세이브 300번도 안 늘어남",
+     mod._alive.size===base, base+" → "+mod._alive.size);
+
+  /* 불러오기(loadSram)도 껍데기를 씁니다 */
+  const cur = G.current();
+  for(let i=0;i<300;i++) cur.loadSram(new Uint8Array(32));
+  ok("★★★ 세이브 불러오기 300번도 안 늘어남",
+     mod._alive.size===base, base+" → "+mod._alive.size);
+
+  G.stop();
+  ok("★ 끝내면 전부 반납됨", mod._alive.size===0, [...mod._alive].join(","));
+}
+
 console.log(`\n${"=".repeat(46)}\n통과 ${pass}  실패 ${fail}\n`);
 process.exit(fail?1:0);
+})();

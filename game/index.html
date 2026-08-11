@@ -73,6 +73,15 @@ html,body{
 /* 게임이 안 돌 때 이 위에 목록·메뉴를 그립니다.
    ★ body 는 touch-action:none 이라 손가락 스크롤이 막혀 있습니다.
      여기만 위아래 쓸기를 허락합니다 (좌우는 여전히 막습니다). */
+/* ★ 고른 게임의 화면 사진. **목록 뒤에** 깔립니다.
+     글자를 덮지 않게 흐리게 두고, 글자는 그 위에 뜹니다.
+     사진은 인터넷에서 받아온 것이 아니라 그 롬에서 나온 진짜 화면입니다. */
+#shot{ position:absolute; left:0; top:0; pointer-events:none;
+       background-repeat:no-repeat; background-position:center;
+       background-size:contain; image-rendering:pixelated;
+       opacity:.22; filter:grayscale(1) sepia(1) saturate(3) hue-rotate(-12deg);
+       transition:opacity .15s linear; }
+#shot.real{ filter:none; opacity:.28; }
 #page{ position:absolute; overflow-y:auto; overflow-x:hidden; padding:6px 8px;
        scrollbar-width:none; touch-action:pan-y; -webkit-overflow-scrolling:touch; }
 #page::-webkit-scrollbar{ display:none; }
@@ -269,6 +278,7 @@ html,body{
          그러면 게임은 도는데 화면이 까맣습니다. visibility 는 자리를
          그대로 두고 그리기만 안 합니다. -->
     <canvas id="screenGba" width="240" height="160" style="visibility:hidden"></canvas>
+    <div id="shot"></div>
     <div id="page"></div>
   </div>
 
@@ -557,6 +567,9 @@ function fit(){
     cg.style.width=gw+"px"; cg.style.height=gh+"px"; cg.style.top=gy+"px"; }
   const pg = $("page");
   pg.style.left="0px"; pg.style.top=gy+"px"; pg.style.width=gw+"px"; pg.style.height=gh+"px";
+  { const sh = $("shot");
+    sh.style.left="0px"; sh.style.top=gy+"px";
+    sh.style.width=gw+"px"; sh.style.height=gh+"px"; }
 
   $("paneL").style.left="0px";        $("paneL").style.width=gx+"px";
   $("paneR").style.left=(gx+gw)+"px"; $("paneR").style.width=(dw-gx-gw)+"px";
@@ -685,6 +698,15 @@ function draw(){
        때만** 도는 함수라(같은 크기면 첫 줄에서 돌아갑니다), 게임을 켜도
        화면이 안 나오고 브라우저 크기를 바꿔야 그제서야 나왔습니다.
        draw() 는 화면 상태가 바뀔 때마다 도니 여기가 제자리입니다. */
+  /* ★ 고른 게임의 화면 사진을 목록 뒤에 깝니다.
+       게임 중에는 안 깝니다 — 진짜 화면이 거기 있으니까요. */
+  { const sh = $("shot");
+    const cur = (st.screen === "list" && ui.list) ? (ui.list()[st.cursor] || null) : null;
+    const url = (cur && cur.shot) ? cur.shot : "";
+    sh.style.backgroundImage = url ? `url("${url}")` : "";
+    sh.style.display = (url && st.screen === "list") ? "block" : "none";
+    sh.classList.toggle("real", !!st.colorReal); }
+
   const onGba = playing && st.systemId === "gba";
   sc.style.visibility = (playing && !onGba) ? "visible" : "hidden";
   $("screenGba").style.visibility = onGba ? "visible" : "hidden";
@@ -970,6 +992,37 @@ function boot(){
                     else { try { location.replace("../"); } catch (e) { location.href = "../"; } } },
   });
 
+  /* ★★ 게임을 켜고 잠시 뒤 화면을 **한 장 찍어 둡니다.**
+       목록에서 그 게임을 고르면 뒤에 흐리게 깔립니다.
+
+       왜 이렇게 하나 — 인터넷에서 게임 그림을 받아올 수 없습니다(저작권).
+       그런데 받아올 필요도 없습니다: 아드님이 하던 그 화면이 제일 좋고,
+       크기도 정확히 맞고, **어떤 롬을 넣어도** 알아서 생깁니다.
+
+       ★ 이미 사진이 있으면 다시 안 찍습니다. 한 번 찍힌 게 계속 남습니다.
+       ★ GBA 는 그리는 방식이 달라 사진이 안 찍힐 수 있습니다. 그때는
+         조용히 넘어갑니다 — 없으면 없는 대로 목록이 멀쩡합니다. */
+  const SHOT_AFTER_MS = 12000;
+  let shotTimer = 0;
+  function scheduleShot(){
+    if (shotTimer) { clearTimeout(shotTimer); shotTimer = 0; }
+    shotTimer = setTimeout(async () => {
+      shotTimer = 0;
+      try {
+        const st = ui.state;
+        if (st.screen !== "play") return;
+        const rec = ui.playingRec && ui.playingRec();
+        if (!rec || !rec.id || rec.shot) return;
+        const cv = st.systemId === "gba" ? $("screenGba") : $("screen");
+        let url = "";
+        try { url = cv.toDataURL("image/png"); } catch (e) { return; }
+        /* 빈 화면이면 안 남깁니다 (GBA 는 이렇게 될 수 있습니다) */
+        if (!url || url.length < 800) return;
+        await GameMode.RomStore.putShot(rec.id, url);
+      } catch (e) { /* 사진은 있으면 좋은 것이지 없어도 되는 것입니다 */ }
+    }, SHOT_AFTER_MS);
+  }
+
   /* ★ 게임이 뜻하지 않게 사라지면(브라우저가 얼리거나 떠날 때) 화면도 따라 나옵니다.
        안 그러면 "PLAYING" 이라고 적힌 멈춘 화면에 갇힙니다. */
   GameMode.setOnGone(() => {
@@ -1000,6 +1053,7 @@ function boot(){
     releaseAllInput();                    /* 눌린 채 남지 않게 (터치+패드) */
     await ui.corner();
     draw();
+    if (ui.state.screen === "play") scheduleShot();
   });
   onTap($("zClr"), () => { ui.toggleColor(); draw(); });
   onTap($("zPad"), () => {
@@ -1064,6 +1118,20 @@ function boot(){
     return { files: out, zipNote: notes.join(" / ") };
   }
 
+  /* 확장자와 폴더 경로를 뗀 이름 — 롬과 사진을 짝지을 때 씁니다 */
+  function baseKey(name){
+    return String(name || "").replace(/^.*[\\/]/, "").replace(/\.[^.]*$/, "").toLowerCase();
+  }
+  /* 진짜 파일에서 바이트 읽기 (zip 항목은 스스로 read() 를 갖고 있습니다) */
+  function readAsBytes(f){
+    return new Promise((ok, no) => {
+      const r = new FileReader();
+      r.onerror = () => no(new Error("io"));
+      r.onloadend = e => ok(new Uint8Array(e.target.result));
+      r.readAsArrayBuffer(f);
+    });
+  }
+
   async function takeFiles(input){
     const picked = Array.from(input.files || []);
     /* ★ 값을 먼저 비웁니다. 같은 폴더를 두 번 골라도 반응하게. */
@@ -1082,6 +1150,21 @@ function boot(){
       /* ★ zip 에서 나온 것은 여러 개여도 한 개여도 addRoms 로 보냅니다.
            addRom(한 개짜리 길)은 크기·안내 처리가 파일 기준이라
            zip 항목과 안 맞습니다. */
+      /* ★★ 롬 옆에 같은 이름의 .png 가 있으면 **그 게임의 화면 사진**으로 씁니다.
+           (zip 안에 `황금의_태양_K.gba` 와 `황금의_태양_K.png` 를 같이 넣으면
+            게임을 켜보지 않아도 목록에 바로 그림이 뜹니다.)
+         ★ 사진이 없어도 아무 문제 없습니다 — 게임을 켜면 앱이 알아서 찍습니다. */
+      const shots = new Map();
+      for (const f of files.filter(x => /\.png$/i.test(x.name || ""))) {
+        try {
+          const bytes = await (typeof f.read === "function" ? f.read() : readAsBytes(f));
+          if (!bytes || bytes.length > 400 * 1024) continue;     /* 너무 크면 버립니다 */
+          let bin = "";
+          for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+          shots.set(baseKey(f.name), "data:image/png;base64," + btoa(bin));
+        } catch (e) {}
+      }
+
       const fromZip = files.some(f => typeof f.read === "function");
       if (files.length === 1 && !fromZip){ await ui.addRom(files[0]); draw(); return; }
 
@@ -1092,6 +1175,18 @@ function boot(){
           $("note").textContent = `READING ${now} / ${total}`;
         }
       });
+      /* 사진을 짝지어 붙입니다 — 파일 이름(확장자 뗀 것)이 열쇠입니다 */
+      if (shots.size) {
+        try {
+          for (const r of await GameMode.RomStore.list()) {
+            if (r.shot) continue;
+            const url = shots.get(baseKey(r.file));
+            if (url) await GameMode.RomStore.putShot(r.id, url);
+          }
+          await ui.refresh();
+        } catch (e) {}
+      }
+
       /* zip 에서 버린 것이 있으면 뒤에 덧붙입니다 */
       if (zipNote) ui.warn(ui.state.notice ? ui.state.notice + " / " + zipNote : zipNote);
       draw();

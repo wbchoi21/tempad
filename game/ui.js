@@ -84,7 +84,8 @@ const SRAM_FAIL = "COULD NOT SAVE — STORAGE FULL?";
      에뮬레이터는 이미 제 메모리로 복사해 갔으니 여기서는 필요 없습니다. */
 function slimRec(rec, sys) {
   if (!rec) return null;
-  return { id: rec.id, title: rec.title, file: rec.file, note: rec.note,
+  return { id: rec.id, title: rec.title, shot: rec.shot || null,
+           file: rec.file, note: rec.note,
            system: rec.system || sys, bundled: !!rec.bundled,
            fromBundled: rec.fromBundled || null,
            played: rec.played || 0,
@@ -269,6 +270,9 @@ Ui.prototype = {
   systemName() { return sysDef(systemId).name; },
   backToSystem() { navGen++; screen = "system"; cursor = 0; notice = ""; pending = null; },
   warn(msg) { notice = msg; },
+
+  /* 지금 하는 게임의 기록. 화면 사진을 찍어 붙일 때 씁니다. */
+  playingRec() { return playing; },
 
   /* ── 보기 토글 두 개 ──────────────────────────────────────────────────
      ★ 이 둘은 게임 입력과 아무 상관이 없습니다. 화면 구석의 독립 버튼입니다. */

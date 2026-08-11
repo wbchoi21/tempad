@@ -1373,6 +1373,22 @@ console.log("\n[32] ★ 공유 설정이 실제로 적혀 있는가 (app.json ·
      /k !== VERSION && k !== SHARE_BOX/.test(sw));
 }
 
+console.log("\n[32-2] ★★ 게임 화면 사진이 목록 글자를 덮으면 안 됩니다");
+{ /* 사진은 **목록 뒤에** 깔립니다. 글자는 그 위에 뜹니다.
+     (2026-08-11 형님 지시 — "게임리스트 글짜 덥지말고") */
+  const src = require("fs").readFileSync(path.join(D, "index.html"), "utf8");
+  ok("★ 사진 자리가 있음", /id="shot"/.test(src));
+  ok("★★★ 목록보다 먼저 그려짐 (뒤에 깔림)",
+     src.indexOf('<div id="shot">') < src.indexOf('<div id="page">')
+     && src.indexOf('<div id="shot">') > 0);
+  ok("★★ 손가락을 안 가로챔 (pointer-events:none)",
+     /#shot\{[^}]*pointer-events:none/.test(src));
+  ok("★★ 흐리게 깔림 (글자가 읽혀야 함)", /#shot\{[^}]*opacity:\.\d/.test(src));
+  ok("★ 게임 중에는 안 깔림 (진짜 화면이 거기 있음)",
+     /st\.screen === "list"\) \? "block" : "none"/.test(src));
+  ok("★ 사진이 없으면 아무것도 안 깔림", /url \? `url\("\$\{url\}"\)` : ""/.test(src));
+}
+
 console.log("\n[33] ★★ 파일 입력칸이 화면에 보이면 안 됩니다");
 { /* 브라우저 기본 파일칸은 회색 "파일 선택" 버튼으로 그려집니다.
      지우면 안 되고(게임 넣는 유일한 길입니다) 화면 밖으로 밀어둬야 합니다.

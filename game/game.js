@@ -319,7 +319,8 @@ function listByCursor(db) {
              무력해집니다. 실제로 그래서 지운 게임이 목록에 남았습니다. */
       if (v.removed) { c.continue(); return; }
       /* ★ 여기서 필요한 것만 베껴 담습니다. v(롬 포함)는 곧 버려집니다. */
-      out.push({ id:v.id, title:v.title, file:v.file, fromBundled:v.fromBundled || null,
+      out.push({ id:v.id, title:v.title, shot:v.shot || null,
+                 file:v.file, fromBundled:v.fromBundled || null,
                  /* ★ 옛 기록에는 system 이 없습니다. 그때는 게임보이뿐이었으니 gb 입니다.
                       이 한 줄이 판올림 이행(migration) 전부입니다.       */
                  system: v.system || "gb",
@@ -369,6 +370,10 @@ const RomStore = {
       file: fileName || "",
       size: bytes.length, rom: bytes,
       sram: null, states: [null, null, null],
+      /* 게임 화면 사진 (data URL). 목록 뒤에 흐리게 깔립니다.
+         ★ 인터넷에서 받아오지 않습니다 — 게임을 켤 때 앱이 직접 찍거나,
+           롬 옆에 같은 이름의 .png 를 넣어주면 그걸 씁니다. */
+      shot: null,
       added: Date.now(), played: 0,
       fromBundled: (extra && extra.fromBundled) || null,
       /* ★ 어느 기기 것인지. 안 넘어오면 롬을 직접 보고 정합니다 —
@@ -394,6 +399,7 @@ const RomStore = {
              게임이 배터리 세이브를 하는 순간 슬롯 저장이 통째로 날아갔습니다. */
         if (cur && cur.id) {
           rec.sram   = cur.sram;
+          rec.shot   = cur.shot || rec.shot;
           rec.states = cur.states || rec.states;
           rec.added  = cur.added;
           rec.played = cur.played || 0;
@@ -448,7 +454,8 @@ const RomStore = {
       try {
         /* ★ 지운 게임은 목록에 안 보입니다. 세이브만 남겨둔 껍데기입니다. */
         if (r && r.removed) continue;
-        out.push({ id:r.id, title:r.title || "UNTITLED", file:r.file || "",
+        out.push({ id:r.id, title:r.title || "UNTITLED", shot:r.shot || null,
+                   file:r.file || "",
                    fromBundled: r.fromBundled || null,
                    system: r.system || "gb",      /* 옛 기록은 전부 게임보이 */
                    size:r.size || 0, hasSram: !!r.sram,
@@ -556,6 +563,26 @@ const RomStore = {
 
      ★ 남길 게 없으면(세이브도 저장칸도 없으면) 그냥 지웁니다.
        빈 껍데기를 쌓아둘 이유가 없습니다.                                */
+  /* 화면 사진 한 칸만 바꿉니다. 기록 전체를 읽었다 쓰면 그 사이의
+     배터리 세이브가 날아갑니다 (putSlot 과 같은 이유). */
+  putShot(id, dataUrl) {
+    return openDB().then(db => new Promise((ok, no) => {
+      let t;
+      try { t = db.transaction(STORE, "readwrite"); }
+      catch (e) { try { db.close(); } catch (x) {} no(e); return; }
+      const st = t.objectStore(STORE);
+      const g = st.get(id);
+      let out = false;
+      g.onsuccess = () => {
+        const cur = g.result;
+        if (!cur) return;
+        cur.shot = dataUrl || null;
+        st.put(cur); out = true;
+      };
+      t.oncomplete = () => { db.close(); ok(out); };
+      t.onerror = t.onabort = () => { db.close(); no(t.error || new Error("db-error")); };
+    }));
+  },
   async remove(id) {
     const db = await openDB();
     try {
@@ -566,6 +593,7 @@ const RomStore = {
         id: cur.id, title: cur.title, file: cur.file || "",
         system: cur.system || "gb", fromBundled: cur.fromBundled || null,
         sram: cur.sram, states: cur.states || [null, null, null],
+        shot: cur.shot || null,
         added: cur.added || 0, played: cur.played || 0,
         rom: null, size: 0,
         removed: true,        /* 목록에는 안 보입니다 */

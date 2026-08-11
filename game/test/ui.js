@@ -520,6 +520,17 @@ console.log("\n[17] ★★ v2 — 토글 두 개 (컬러 / 조작판)");
   t2.ui.toggleColor();
   ok("★ 게임 중 토글은 에뮬에 전달됨", t2.colorSet.length===n+1 && t2.colorSet[n]===true,
      t2.colorSet.join(","));
+  /* ★★ 그런데 **게임 화면에는 글자를 남기지 않습니다.**
+       여기는 게임 화면이고, 구석 버튼에 이미 COLOR / AMBER 라고 적혀
+       있습니다. 같은 말을 게임 위에 겹쳐 쓸 이유가 없습니다.
+       (2026-08-11 형님 지적 — "게임화면이잖아") */
+  ok("★★★ 게임 중에는 색 안내가 화면에 안 남음", t2.ui.state.notice === "",
+     JSON.stringify(t2.ui.state.notice));
+  /* 목록에서는 눌렸다는 걸 알려주는 값이 있으니 남깁니다 */
+  const tList=fresh(); await tList.ui.pickSystem("gb");
+  tList.ui.toggleColor();
+  ok("★ 목록에서는 색 안내가 나옴", /REAL COLOR/.test(tList.ui.state.notice),
+     tList.ui.state.notice);
   ok("★ 시작할 때 지금 설정을 넘겨줌", t2.started.o.colorReal===false, String(t2.started.o.colorReal));
 
   /* 저장되는가 */
@@ -568,6 +579,16 @@ console.log("\n[19] ★ 여러 개 한꺼번에 넣기");
   /* 같은 것을 또 넣으면 새로 센 것이 없어야 합니다 */
   const r2=await t.ui.addRoms(files);
   ok("★ 다시 넣으면 새로 안 셈", r2.added===0 && r2.dup===3, JSON.stringify(r2));
+  /* ★★ 숫자만으로는 **어느 게임이 빠졌는지** 알 수 없습니다.
+       "3 ALREADY IN" 만 보고는 무엇이 안 들어갔는지 모릅니다.
+       (2026-08-11 형님 지적 — "뭐뭐 중복되서 뺏음 이라고 표시")
+     ★ 중복 판정은 **롬 내용 지문**으로 합니다 — 파일 이름은 안 봅니다. */
+  ok("★★★ 중복된 게임 이름이 안내에 나옴", /ALREADY IN \(/.test(t.ui.state.notice),
+     t.ui.state.notice);
+  { const shown = (t.ui.state.notice.match(/ALREADY IN \(([^)]*)\)/) || [])[1] || "";
+    ok("★★★ 실제 게임 이름이 들어 있음",
+       shown.split(", ").filter(Boolean).length >= 1
+       && t.ui.list().some(r => shown.indexOf(r.title) >= 0), shown); }
 
   const t2=fresh(); await t2.ui.pickSystem("gb");
   const r3=await t2.ui.addRoms([{name:"x.jpg",bytes:new Uint8Array(10),size:10}]);

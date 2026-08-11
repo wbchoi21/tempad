@@ -31,13 +31,18 @@ console.log("\n[1] 넣고 읽기");
   const rom=gbRom(7,"TESTGAME");
   const rec=await G.RomStore.add(rom,"my.gb");
   ok("들어감", !!rec && !!rec.id);
-  ok("제목을 헤더에서 읽음", rec.title==="TESTGAME", rec.title);
+  /* ★ 제목은 파일 이름에서 나옵니다 (5-1 참고). 헤더는 이름이 없을 때만. */
+  ok("제목을 파일 이름에서 읽음", rec.title==="my", rec.title);
   const got=await G.RomStore.get(rec.id);
   ok("다시 읽힘", !!got && got.id===rec.id);
   ok("롬 내용이 그대로", got.rom.length===rom.length && got.rom[0x104]===0xCE);
   const list=await G.RomStore.list();
   ok("목록에 하나", list.length===1, list.length+"개");
   ok("★ 목록에는 롬 내용을 안 담음", list[0].rom===undefined);
+  /* 이름이 없을 때만 헤더로 떨어집니다 — 보관소를 따로 써서 위 개수에 안 섞이게 */
+  const G2=fresh();
+  const noname=await G2.RomStore.add(gbRom(8,"TESTGAME"),"");
+  ok("이름이 없으면 헤더에서", noname.title==="TESTGAME", noname.title);
 }
 
 console.log("\n[2] ★★ 같은 롬을 다시 넣어도 저장이 지워지면 안 됨");
@@ -61,7 +66,10 @@ console.log("\n[2-2] ★ 다시 넣어도 이름·파일명이 안 바뀜");
   const a=await G.RomStore.add(rom,"tobu.gb");
   const b=await G.RomStore.add(rom,"전혀다른이름.gb");
   ok("★ 파일 이름은 처음 것", b.file==="tobu.gb", b.file);
-  ok("★ 제목도 처음 것", b.title==="HDRNAME", b.title);
+  /* ★★ 제목은 **새 이름이 이깁니다.** 이름을 바꿔 다시 넣는 것이
+       곧 이름 고치기이기 때문입니다(5-1). 파일 이름 자체는 처음 것을
+       지켜서, 어디서 온 파일인지는 잃지 않습니다. */
+  ok("★★ 제목은 새 이름으로 바뀜", b.title==="전혀다른이름", b.title);
   ok("기록이 하나뿐", (await G.RomStore.list()).length===1);
 }
 
@@ -123,6 +131,74 @@ console.log("\n[5] 지우기");
   ok("지워짐", (await G.RomStore.get(a.id))===null);
   ok("목록도 비었음", (await G.RomStore.list()).length===0);
   ok("없는 걸 지워도 안 터짐", await G.RomStore.remove("없음")===undefined || true);
+}
+
+console.log("\n[5-1] ★★★ 제목은 파일 이름에서 나옵니다");
+{ /* 한글 패치판은 롬 안의 이름이 원본(일본판) 코드명입니다.
+     "황금의 태양" 이 OugonTaiyo_A 로, "효월의 원무곡" 이 CASTLEVANIA2
+     (다른 게임 이름!)로 떠서 아이가 알아볼 수 없습니다.
+     ★ 한때 지문→이름 표를 뒀는데, 열쇠가 사람이 못 읽는 지문이라
+       게임을 넣을 때마다 표를 고쳐야 하는 짐이 됐습니다. 파일 이름이면
+       넣는 사람이 그 자리에서 정합니다. */
+  const G = fresh();
+  const rom = gbRom(9, "CODENAME");
+  const a = await G.RomStore.add(rom, "황금의_태양_K.gba");
+  ok("★★★ 파일 이름이 롬 헤더를 이김", a.title === "황금의 태양 (K)", a.title);
+
+  const b = await G.RomStore.add(gbRom(10, "PLAIN"), "Wario_Land_4_E.gb");
+  ok("★★ 영문도 같은 규칙", b.title === "Wario Land 4 (E)", b.title);
+
+  const c = await G.RomStore.add(gbRom(11, "PLAIN2"), "Mole_Mania.gb");
+  ok("★ 언어 표시가 없으면 안 붙임", c.title === "Mole Mania", c.title);
+
+  const d = await G.RomStore.add(rom, "황금의_태양_1_K.gba");
+  ok("★★★ 이름을 바꿔 다시 넣으면 새 이름이 이김",
+     d.title === "황금의 태양 1 (K)", d.title);
+  ok("★ 같은 롬이라 칸은 그대로", d.id === a.id);
+
+  const e = await G.RomStore.add(gbRom(12, "TOBU"), "tobu.gb", { fromBundled:"tobu.gb" });
+  ok("★★ 기본 게임은 파일 이름을 안 씀", e.title === "TOBU", e.title);
+
+  const f = await G.RomStore.add(gbRom(13, "HEADERNAME"), "");
+  ok("★ 이름이 비면 롬 헤더", f.title === "HEADERNAME", f.title);
+}
+
+
+console.log("\n[5-2] ★★★ 지워도 세이브는 남아야 합니다");
+{ /* 자리를 비우려고 게임 하나를 지운 순간 그 안의 배터리 세이브(포켓몬의
+     "리포트")와 저장 칸이 같이 사라지면 되돌릴 방법이 없습니다.
+     롬은 최대 32MB, 세이브는 몇십 KB — 자리를 비우는 목적은 그대로입니다. */
+  const G=fresh();
+  const rom = gbRom(4,"KEEP");
+  const a = await G.RomStore.add(rom, "keep.gb");
+  await G.RomStore.patch(a.id, { sram: new Uint8Array([1,2,3,4,5]) });
+  await G.RomStore.putSlot(a.id, 1, new Uint8Array([9,8,7]));
+  ok("(준비) 세이브가 들어감", !!(await G.RomStore.get(a.id)).sram);
+
+  await G.RomStore.remove(a.id);
+  ok("★ 목록에서 사라짐", (await G.RomStore.list()).length===0);
+  ok("★ 켜지지도 않음 (롬이 없음)", (await G.RomStore.get(a.id))===null);
+
+  /* 같은 롬을 **다른 이름으로** 다시 넣어도 이어져야 합니다 —
+     같은 게임인지는 내용 지문으로 봅니다. */
+  await G.RomStore.add(rom, "다시넣기.gb");
+  const back = await G.RomStore.get(a.id);
+  ok("★★★ 배터리 세이브가 그대로", !!back && !!back.sram
+     && back.sram[0]===1 && back.sram[4]===5,
+     back && back.sram && Array.from(back.sram).join(","));
+  ok("★★★ 저장 칸도 그대로", !!back && !!back.states[1]
+     && back.states[1][0]===9);
+  ok("★ 목록에 다시 보임", (await G.RomStore.list()).length===1);
+}
+
+console.log("\n[5-3] 남길 게 없으면 껍데기를 안 남깁니다");
+{ const G=fresh();
+  const a = await G.RomStore.add(gbRom(5,"PLAIN"),"p.gb");
+  await G.RomStore.remove(a.id);
+  /* 세이브가 없었으니 통째로 지워야 합니다. 다시 넣으면 새 기록입니다. */
+  ok("★ 껍데기가 안 남음", (await G.RomStore.get(a.id))===null);
+  const again = await G.RomStore.add(gbRom(5,"PLAIN"),"p.gb");
+  ok("★ 다시 넣으면 세이브는 비어 있음", again.sram===null, String(again.sram));
 }
 
 console.log("\n[6] 롬 구분");

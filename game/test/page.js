@@ -255,7 +255,32 @@ function run(opts={}){
   };
   sandbox.window=sandbox;
   sandbox.globalThis=sandbox;
-  if(opts.mgba) sandbox.MgbaCore = { load: async()=>({core:"mgba"}) };
+  /* ★★ 가짜 GBA 코어. **세션까지 등록해야** 합니다. ★★
+       전에는 `load: async()=>({core:"mgba"})` 뿐이었습니다. 그러면
+       game.js 의 SESSIONS.gba 가 계속 null 이라 start() 가 "NO CORE" 로
+       터지고, **GBA 게임을 켜는 길이 검사에서 한 번도 안 돌았습니다.**
+       그래서 "GBA 를 켜면 까만 화면" 같은 버그가 그대로 통과했습니다.
+       진짜 껍데기(mgba-glue.js)와 같은 모양을 갖춰야 의미가 있습니다. */
+  if(opts.mgba) sandbox.MgbaCore = { load: async()=>{
+    class FakeGbaSession {
+      constructor(module, romBytes, o){ this.module=module; this.opts=o||{};
+        this.dead=false; this.paused=false; this.started=false;
+        this.userPaused=false; this.colorReal=!!(o&&o.colorReal); }
+      start(){ this.started=true; this.paused=false; }
+      press(){}
+      pause(byUser){ if(byUser) this.userPaused=true; this.paused=true; }
+      resume(){ this.userPaused=false; this.paused=false; }
+      get running(){ return this.started && !this.dead && !this.paused; }
+      getState(){ return this.dead ? null : new Uint8Array([7,7,7]); }
+      loadState(b){ return !this.dead && !!b && b.length===3; }
+      flushSram(){ return false; }
+      loadSram(){}
+      setColorMode(r){ this.colorReal=!!r; return true; }
+      destroy(){ this.dead=true; this.started=false; }
+    }
+    sandbox.GameMode.registerCore("gba", FakeGbaSession);
+    return { core:"mgba" };
+  } };
   vm.createContext(sandbox);
   /* 부품들을 먼저 넣습니다 (실제 <script src> 순서와 같게).
      ★ unzip.js 는 opts.noZip 이면 안 넣습니다 — 옛 서비스워커가 살아있어서
@@ -776,6 +801,62 @@ console.log("\n[13] ★ 파일 넣기 — 시스템이 다르면 어디로 갔�
   ok("★★ GBA 목록에 실제로 있음", S(r).count===1, S(r).count);
 }
 
+console.log("\n[13-1] ★★★ GBA 를 켜면 **그 순간** GBA 화면이 보여야 합니다");
+{ /* ★★ 여태 검사가 "동작" 만 보고 **화면에 보이는가** 를 안 봤습니다.
+     그래서 이런 일이 있었습니다 — 파이널 파이트를 켜면 **까만 화면**이고,
+     브라우저를 전체화면으로 했다 돌리면 그제서야 나옵니다.
+     원인은 캔버스를 보이고 숨기는 판단이 fit() 안에 있었던 것입니다.
+     fit() 은 **창 크기가 바뀔 때만** 도는 함수라(같은 크기면 첫 줄에서
+     그냥 돌아갑니다), 게임을 켜는 것만으로는 한 번도 안 돌았습니다.
+     ★ 그래서 이 검사는 **fit 을 부르지 않고** 봅니다. 그게 핵심입니다. */
+  const r=run({mgba:true}); await wait();
+  tapNode(r.els.page, node({s:"gb"})); await wait();
+  r.els.file.files=[fakeGbaFile("FIGHT.gba", 57)];
+  r.els.file.fire("change",{target:r.els.file}); await wait();
+  tap(r.els.zMain); await wait();
+  tapNode(r.els.page, node({s:"gba"})); await wait();
+  ok("(준비) GBA 목록에 하나", S(r).count===1, S(r).count);
+  tapNode(r.els.page, node({i:"0"})); await wait();
+  tapNode(r.els.page, node({i:"0"})); await settle(r);
+  ok("(준비) 게임이 켜짐", S(r).screen==="play", S(r).screen);
+
+  ok("★★★ GBA 캔버스가 보임 (크기를 안 바꿨는데도)",
+     r.els.screenGba.style.visibility === "visible",
+     JSON.stringify(r.els.screenGba.style.visibility));
+  ok("★★ 게임보이 캔버스는 가려짐 (두 개가 겹쳐 보이면 안 됨)",
+     r.els.screen.style.visibility === "hidden",
+     JSON.stringify(r.els.screen.style.visibility));
+
+  /* ★★ 메뉴를 열면 **얼어붙은 게임 화면 위에 메뉴가 겹치면 안 됩니다.**
+       (2026-08-11 형님 지적 — "게임체인지를 하면 게임화면이 프리징되고
+        그 위에 메뉴가 나옴") 게임보이는 이미 화면을 감췄는데 GBA 만
+       그대로 남아 있었습니다. 둘이 같아야 합니다. */
+  tap(r.els.zMain); await wait();          /* MENU */
+  ok("(준비) 메뉴로 감", S(r).screen==="menu", S(r).screen);
+  ok("★★★ 메뉴에서는 GBA 화면이 안 보임 (얼어붙은 그림 위에 메뉴 금지)",
+     r.els.screenGba.style.visibility === "hidden",
+     JSON.stringify(r.els.screenGba.style.visibility));
+
+  /* 목록으로 나가도 마찬가지 */
+  r.read("ui.quit()"); await settle(r);
+  ok("(준비) 목록으로 나옴", S(r).screen==="list", S(r).screen);
+  ok("★★ 목록에서도 GBA 화면이 안 보임",
+     r.els.screenGba.style.visibility === "hidden",
+     JSON.stringify(r.els.screenGba.style.visibility));
+}
+
+console.log("\n[13-1b] ★ 게임보이를 켜면 반대로 되어야 합니다");
+{ const r=run({mgba:true}); await wait();
+  tapNode(r.els.page, node({s:"gb"})); await wait();
+  tapNode(r.els.page, node({i:"0"})); await wait();
+  tapNode(r.els.page, node({i:"0"})); await settle(r);
+  ok("(준비) 켜짐", S(r).screen==="play", S(r).screen);
+  ok("★★ 게임보이 캔버스가 보임", r.els.screen.style.visibility === "visible",
+     JSON.stringify(r.els.screen.style.visibility));
+  ok("★★ GBA 캔버스는 가려짐", r.els.screenGba.style.visibility === "hidden",
+     JSON.stringify(r.els.screenGba.style.visibility));
+}
+
 console.log("\n[13-2] ★ GBA 코어가 없으면 이유가 떠야 함 (검은 화면 금지)");
 { const r=run(); await wait();          /* mgba 없이 */
   tapNode(r.els.page, node({s:"gb"})); await wait();
@@ -1290,6 +1371,23 @@ console.log("\n[32] ★ 공유 설정이 실제로 적혀 있는가 (app.json ·
      !!key(sw) && key(sw) === key(pg), key(sw) + " vs " + key(pg));
   ok("★★ 옛 저장분을 지울 때 공유 상자는 남김",
      /k !== VERSION && k !== SHARE_BOX/.test(sw));
+}
+
+console.log("\n[33] ★★ 파일 입력칸이 화면에 보이면 안 됩니다");
+{ /* 브라우저 기본 파일칸은 회색 "파일 선택" 버튼으로 그려집니다.
+     지우면 안 되고(게임 넣는 유일한 길입니다) 화면 밖으로 밀어둬야 합니다.
+     ★ zip 칸을 새로 만들면서 숨김 목록에 안 넣어, 화면 왼쪽 위에 회색 버튼이
+       그대로 튀어나온 채 배포까지 됐습니다(B0811j). 형님이 화면을 보고
+       찾아냈습니다 — 검사가 못 봤다는 뜻이라 여기에 못 박습니다. */
+  const src = require("fs").readFileSync(path.join(D, "index.html"), "utf8");
+  const ids = [...src.matchAll(/<input[^>]*type="file"[^>]*id="([\w-]+)"/g)].map(m => m[1]);
+  ok("(준비) 파일칸을 찾음", ids.length >= 3, ids.join(", "));
+  /* 숨김 규칙에 적힌 id 들 */
+  const rule = (src.match(/([^\n{]*)\{\s*position:fixed;\s*left:-9999px;/) || [])[1] || "";
+  const hidden = new Set([...rule.matchAll(/#([\w-]+)/g)].map(m => m[1]));
+  const bare = ids.filter(i => !hidden.has(i));
+  ok("★★★ 파일칸이 전부 숨겨져 있음", bare.length === 0,
+     bare.length ? "화면에 그대로 보이는 칸: " + bare.join(", ") : "");
 }
 
 console.log(`\n${"=".repeat(46)}\n통과 ${pass}  실패 ${fail}\n`);

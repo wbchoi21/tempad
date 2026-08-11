@@ -32,6 +32,63 @@ console.log("\n[1] 색 바꾸기");
      [d[3],d[7],d[11],d[15]].join(","));
 }
 
+console.log("\n[1-2] ★★★ 칠하기를 두 번 해도 화면이 같아야 합니다 (지직거림)");
+{ /* ★★ 이게 없어서 **화면이 지직거렸습니다.**
+
+     전에는 원본 픽셀을 "새 프레임이 왔을 때만" 복사해두고, 칠하기는 매 번
+     돌면서 그 버퍼에 tintOrange 를 **덮어썼습니다.** 프레임이 안 온 틱에는
+     이미 주황으로 칠한 것을 또 칠합니다. 한 번 더 칠할 때마다 색이 조금씩
+     어긋나서 화면이 떨립니다. 버튼을 누르는 순간에 특히 티가 났습니다 —
+     손가락 처리 때문에 그 틱에 프레임이 안 나오기 때문입니다.
+
+     실제 색 모드는 알파만 채워서 여러 번 해도 같으니 멀쩡했습니다.
+     그래서 "템패드 색일 때만 버튼 누르면 지직거린다" 는 모양이었습니다.
+     (2026-08-11 형님이 검사가 아니라 눈으로 찾아냈습니다.)             */
+  const {G,mod,rom}=fresh();
+  const cv = F.makeCanvas(160,144);
+  const s = G.start(mod, rom, { canvas:cv, colorReal:false });
+  ok("(준비) 세션이 켜짐", !!s);
+  /* ★★ 가짜 에뮬레이터의 화면은 **전부 0(새까망)** 입니다.
+       까만 색은 두 번 칠해도 0단계 그대로라, 그냥 두면 이 검사가
+       **아무것도 안 보고 통과합니다.** (실제로 그래서 방해를 놓쳤습니다.)
+       밝기가 골고루 있는 화면을 만들어 넣어야 어긋남이 드러납니다 —
+       밝은 주황은 다시 칠하면 한 단계 어두워집니다. */
+  for (let i = 0; i < s.frameBuf.length; i += 4) {
+    const v = (i >> 2) & 0xFF;
+    s.frameBuf[i] = v; s.frameBuf[i+1] = v; s.frameBuf[i+2] = v; s.frameBuf[i+3] = 255;
+  }
+  /* ★ **한 프레임을 실제로 돌린 뒤에** 봅니다.
+       그냥 paint() 만 부르면, 옛 방식(프레임 올 때만 복사)에서는 화면이
+       내내 비어 있어서 두 번 칠해도 까만 채로 같습니다 — 검사가 헛돕니다.
+       프레임을 돌려야 옛 방식도 화면을 채우고, 그 다음 칠하기에서
+       **덧칠이 일어나는지**가 드러납니다. */
+  s.frame(16);
+  s.paint();
+  const a = cv.last;
+  ok("(준비) 화면이 한 번 찍힘", !!a && a.length === 160*144*4, a && a.length);
+  s.paint();
+  const b = cv.last;
+  let same = !!a && !!b && a.length === b.length;
+  if (same) for (let i=0;i<a.length;i++) if (a[i]!==b[i]) { same=false; break; }
+  ok("★★★ 두 번 칠해도 완전히 같음 (템패드 색)", same,
+     !same && a && b ? "첫칠 "+[a[0],a[1],a[2]].join(",")+" / 두번째 "+[b[0],b[1],b[2]].join(",") : "");
+  for (let i=0;i<10;i++) s.paint();
+  const c = cv.last;
+  let same2 = !!c && c.length === a.length;
+  if (same2) for (let i=0;i<a.length;i++) if (a[i]!==c[i]) { same2=false; break; }
+  ok("★★★ 열두 번을 칠해도 같음", same2);
+
+  const cv2 = F.makeCanvas(160,144);
+  const s2 = G.start(mod, rom, { canvas:cv2, colorReal:true });
+  s2.paint(); const x = cv2.last;
+  s2.paint(); const y = cv2.last;
+  let same3 = !!x && !!y && x.length === y.length;
+  if (same3) for (let i=0;i<x.length;i++) if (x[i]!==y[i]) { same3=false; break; }
+  ok("★★ 실제 색에서도 같음", same3);
+  ok("★ 실제 색은 투명도가 채워짐", !!x && x[3]===255, x && x[3]);
+  G.stop();
+}
+
 console.log("\n[2] 롬 제목 읽기");
 { const {G,rom}=fresh();
   ok("헤더에서 제목", G.romTitle(rom)==="TVA TEST", G.romTitle(rom));

@@ -38,7 +38,8 @@ function fresh(opt = {}) {
 
   const store = {
     async list() {
-      return [...db.values()].map(r => ({
+      /* ★ 지운 게임(세이브만 남은 껍데기)은 목록에 안 보입니다 — 진짜와 같게 */
+      return [...db.values()].filter(r => !r.removed).map(r => ({
         id:r.id, title:r.title, file:r.file, fromBundled:r.fromBundled||null, size:r.size,
         system:r.system||"gb",
         hasSram:!!r.sram, states:(r.states||[null,null,null]).map(x => !!x),
@@ -69,12 +70,34 @@ function fresh(opt = {}) {
         rec.title       = old.title || rec.title;
         rec.fromBundled = old.fromBundled || rec.fromBundled;
       }
+      /* 진짜는 새 기록을 통째로 덮어써서 removed 가 저절로 풀립니다 */
+      rec.removed = false;
       db.set(id, rec);
       return rec;
     },
-    async get(id) { return db.get(id) || null; },
+    /* ★ 지운 게임은 롬이 없으니 못 켭니다 — 진짜와 같게 */
+    async get(id) { const r = db.get(id); return (r && !r.removed) ? r : null; },
     async patch(id, ch) { const r = db.get(id); if (r) Object.assign(r, ch); return r || null; },
-    async remove(id) { if (opt.removeFails) throw new Error("nope"); db.delete(id); },
+    async putSlot(id, n, value) {
+      const r = db.get(id); if (!r) return null;
+      const st = (r.states || [null,null,null]).slice();
+      st[n] = value; r.states = st; return r;
+    },
+    /* ★★ 진짜(game.js 의 remove)와 **같은 규칙**이어야 합니다. ★★
+         진짜는 롬만 버리고 세이브는 남깁니다. 가짜가 통째로 지우면
+         "지워도 세이브가 남는가" 를 검사가 볼 수 없습니다 —
+         가짜가 진짜보다 너그러우면 통과는 아무것도 증명하지 않습니다. */
+    async remove(id) {
+      if (opt.removeFails) throw new Error("nope");
+      const cur = db.get(id);
+      const keep = cur && (cur.sram || (cur.states || []).some(Boolean));
+      if (!keep) { db.delete(id); return; }
+      db.set(id, { id:cur.id, title:cur.title, file:cur.file||"",
+                   system:cur.system||"gb", fromBundled:cur.fromBundled||null,
+                   sram:cur.sram, states:cur.states||[null,null,null],
+                   added:cur.added||0, played:cur.played||0,
+                   rom:null, size:0, removed:true });
+    },
   };
 
   const engine = {
@@ -93,7 +116,7 @@ function fresh(opt = {}) {
     canvas: null,
   });
   ui._reset();
-  return { ui, db, get addCalls(){ return addCalls; } };
+  return { ui, db, store, get addCalls(){ return addCalls; } };
 }
 
 /* 목록 화면까지 가 있는 상태로 시작 (기본 게임 5개가 들어 있습니다) */
@@ -407,9 +430,59 @@ async function main() {
     ok("확인하면 지워짐", await t.ui.confirmRemove());
     ok("저장소에서 사라짐", t.db.size === 1, t.db.size);
     ok("목록에서도 사라짐", t.ui.state.count === before - 1, t.ui.state.count);
-    ok("무엇을 지웠는지 알려줌", t.ui.state.notice === "DELETED — " + title, t.ui.state.notice);
+    ok("무엇을 지웠는지 알려줌", t.ui.state.notice.indexOf("DELETED — " + title) === 0,
+       t.ui.state.notice);
+    /* ★ 세이브가 남는다는 걸 알려줘야 합니다. 안 그러면 아드님이
+         "지우면 다 날아간다" 고 믿고 자리가 없어도 못 지웁니다. */
+    ok("세이브는 남는다고 알려줌", /SAVE KEPT/.test(t.ui.state.notice), t.ui.state.notice);
     ok("물음표는 닫힘", t.ui.state.confirm === null);
     ok("두 번 확인해도 또 안 지움", (await t.ui.confirmRemove()) === false);
+  }
+
+  /* ★★★ 게임을 지워도 **세이브는 살아 있어야 합니다** ★★★
+       자리를 비우려고 게임 하나를 지운 순간 그 안의 배터리 세이브와
+       저장 칸이 같이 사라지면 되돌릴 방법이 없습니다. */
+  console.log("\n[지우기 2] ★★★ 지워도 세이브는 남는가");
+  {
+    const t = await atList();
+    await t.ui.addRoms([romFile("keep.gb", 71)]);
+    const mine = t.ui.list().findIndex(r => !r.bundled);
+    const id = t.ui.list()[mine].id;
+    /* 배터리 세이브와 저장 칸을 하나씩 넣어둡니다 */
+    const sram = new Uint8Array([1,2,3,4,5]);
+    const slot = new Uint8Array([9,8,7]);
+    await t.store.patch(id, { sram });
+    await t.store.putSlot(id, 0, slot);
+    ok("(준비) 세이브가 들어감", !!(await t.store.get(id)).sram);
+
+    t.ui.askRemove(mine);
+    ok("지워짐", await t.ui.confirmRemove());
+    ok("★ 목록에서는 사라짐", t.ui.list().findIndex(r => r.id === id) < 0);
+    ok("★ 켜지지도 않음 (롬이 없음)", (await t.store.get(id)) === null);
+
+    /* 같은 롬을 다시 넣으면 세이브가 그대로 이어져야 합니다.
+       ★ 파일 이름을 **다르게** 넣습니다 — 같은 롬인지는 내용으로 봅니다. */
+    await t.ui.addRoms([romFile("다시넣기.gb", 71)]);
+    const back = await t.store.get(id);
+    ok("★★★ 다시 넣으면 배터리 세이브가 그대로",
+       !!back && !!back.sram && back.sram[0] === 1 && back.sram[4] === 5,
+       back && back.sram && Array.from(back.sram).join(","));
+    ok("★★★ 저장 칸도 그대로",
+       !!back && !!back.states[0] && back.states[0][0] === 9,
+       back && back.states && !!back.states[0]);
+    ok("★ 목록에 다시 보임", t.ui.list().findIndex(r => r.id === id) >= 0);
+  }
+
+  /* 세이브가 하나도 없으면 껍데기를 남길 이유가 없습니다 */
+  console.log("\n[지우기 3] 남길 게 없으면 통째로 지웁니다");
+  {
+    const t = await atList();
+    await t.ui.addRoms([romFile("plain.gb", 72)]);
+    const n0 = t.db.size;
+    const mine = t.ui.list().findIndex(r => !r.bundled);
+    t.ui.askRemove(mine);
+    await t.ui.confirmRemove();
+    ok("★ 껍데기를 안 남김", t.db.size === n0 - 1, t.db.size + " (전 " + n0 + ")");
   }
 
   /* ★★ 기본으로 들어 있는 게임은 못 지웁니다 ★★ */

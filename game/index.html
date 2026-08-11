@@ -54,9 +54,22 @@ html,body{
 #dev{ position:absolute; border:2px solid var(--or); border-radius:10px; overflow:hidden; }
 
 /* ── 가운데 (게임 화면 = 내용이 사는 곳) ─────────────────────────────── */
-#stage{ position:absolute; border:2px solid var(--or); }
-#screen{ display:block; image-rendering:pixelated; image-rendering:crisp-edges;
-         background:var(--bg); width:100%; height:100%; }
+/* ★ 게임화면 테두리는 **좌우 선만** 씁니다.
+     위아래 선을 두면 바깥 테두리와의 여백이 위아래로 생기는데, 그게
+     한쪽으로 쏠려 보였습니다. 선을 없애고 좌우선을 바깥 테두리까지
+     쭉 이으면 여백 자체가 없어져 쏠릴 것이 없습니다. */
+#stage{ position:absolute; border-left:2px solid var(--or);
+        border-right:2px solid var(--or); }
+/* ★ 테두리가 세로로 꽉 차게 되었으므로, 화면은 그 안에서 자리를 잡아
+     띄웁니다(fit 이 top 을 정합니다). 안 그러면 위에 딱 붙습니다. */
+#screen,#screenGba{ position:absolute; left:0; display:block;
+         image-rendering:pixelated; image-rendering:crisp-edges;
+         background:var(--bg); }
+/* GBA 는 mGBA 가 제 캔버스에 직접 그립니다. 픽셀을 우리가 못 만지므로
+   주황은 CSS 필터로 만듭니다 — GPU 가 하니 매 프레임 비용이 0 입니다.
+   ★ 게임보이처럼 4단계로 뭉개면 안 됩니다. GBA 는 색이 수천 가지라
+     글자가 안 보이게 됩니다. 앰버 모니터처럼 **연속된 주황**이 맞습니다. */
+#screenGba.amber{ filter: grayscale(1) sepia(1) saturate(4) hue-rotate(-12deg) contrast(1.15); }
 /* 게임이 안 돌 때 이 위에 목록·메뉴를 그립니다.
    ★ body 는 touch-action:none 이라 손가락 스크롤이 막혀 있습니다.
      여기만 위아래 쓸기를 허락합니다 (좌우는 여전히 막습니다). */
@@ -144,9 +157,12 @@ html,body{
 /* ── 게임 버튼은 전부 고정 크기 (손가락 크기라 글자와 무관) ──────────
    NES 패드 배치를 따릅니다:
      십자키 왼쪽 · SELECT/START 작은 알약 두 개 · B A 동그라미 (B 가 왼쪽) */
+/* ★ 글자 크기는 **버튼 크기에 맞춥니다.** 15px 은 지름 58px 버튼에서
+     너무 작아 안 보였습니다. 여기 글자들은 --fs(읽는 글자 크기)를 따르지
+     않습니다 — 버튼은 손가락 크기로 고정이라 글자도 같이 고정입니다. */
 .btn{ position:absolute; border:3px solid var(--dim); border-radius:50%;
       display:flex; align-items:center; justify-content:center;
-      font-size:15px; color:var(--dim); }
+      font-size:24px; font-weight:700; color:var(--dim); }
 /* ★★ 보이는 것보다 **누를 수 있는 면이 더 넓습니다.** ★★
      테두리 바깥으로 10px 씩 더 잡습니다. 게임 중에 화면을 안 보고
      엄지로 더듬어 누르기 때문에, 빗나가도 눌리는 게 맞습니다. */
@@ -154,18 +170,19 @@ html,body{
 .btn.on{ border-color:var(--or); color:var(--or); background:rgba(248,134,30,.18); }
 /* ★ GBA 의 L·R — A·B 위에 답니다. 모서리를 둥근 네모로 해서
      동그란 A·B 와 손끝 느낌이 다르게 했습니다 (안 보고 눌러도 구분되게). */
-.btn.sh{ border-radius:9px; font-size:13px; }
+.btn.sh{ border-radius:9px; font-size:18px; font-weight:700; }
 /* SELECT / START — 눕힌 알약 */
 .cap{ position:absolute; border:2px solid var(--dim); border-radius:99px;
       display:flex; align-items:center; justify-content:center;
       font-size:8px; letter-spacing:.5px; color:var(--dim); }
 .cap.on{ border-color:var(--or); color:var(--or); background:rgba(248,134,30,.18); }
-.caplbl{ position:absolute; font-size:7px; letter-spacing:1px; color:var(--dim);
+/* SELECT / START 이름표 — 7px 은 사실상 안 보였습니다 */
+.caplbl{ position:absolute; font-size:11px; letter-spacing:.5px; color:var(--dim);
          text-align:center; pointer-events:none; }
 /* 글자 크기 조절 (왼쪽 판 위) */
 .fsbtn{ position:absolute; border:2px solid var(--dim); border-radius:6px;
         display:flex; align-items:center; justify-content:center;
-        font-size:12px; color:var(--dim); }
+        font-size:15px; font-weight:700; color:var(--dim); }
 .fsbtn.on{ border-color:var(--or); color:var(--or); }
 
 /* ── ★★ 구석 존 — 메뉴와 토글. 게임 조작과 완전히 분리된 구역 ★★ ──────
@@ -215,7 +232,11 @@ html,body{
      무시한 전례가 있습니다. 그러면 "+ ADD GAME" 이 아무 반응 없는 버튼이
      됩니다 — 게임을 넣는 유일한 길이 막힙니다.
      보이지만 않게 화면 밖으로 밀어둡니다. 이게 널리 쓰는 안전한 방법입니다. */
-#file,#dir{ position:fixed; left:-9999px; top:0; width:1px; height:1px;
+/* ★★ 파일 입력칸을 **하나도 빠뜨리지 말 것.** ★★
+     zip 칸을 새로 만들면서 이 목록에 안 넣어서, 화면 왼쪽 위에
+     "파일 선택" 회색 버튼이 그대로 튀어나왔습니다(B0811j 로 배포까지 됐습니다).
+     새 입력칸을 만들면 반드시 여기에도 더하세요 — 검사가 지킵니다. */
+#file,#dir,#zip{ position:fixed; left:-9999px; top:0; width:1px; height:1px;
             opacity:0; pointer-events:none; }
 /* 조작판을 껐을 때 — 게임 버튼만 숨깁니다. 구석 존은 그대로 남습니다.
    ★ 이게 핵심입니다. 다 숨겨버리면 패드가 없는 사람이 갇힙니다. */
@@ -239,6 +260,15 @@ html,body{
 
   <div id="stage">
     <canvas id="screen" width="160" height="144"></canvas>
+    <!-- ★ GBA 전용 캔버스. 한 캔버스에는 2D 든 WebGL 이든 **한 종류만**
+         붙일 수 있어서, binjgb(2D) 와 mGBA 가 같이 못 씁니다.
+         GBA 를 켤 때만 보입니다. -->
+    <!-- ★ display:none 이 아니라 visibility 로 숨깁니다.
+         display:none 이면 **자리를 아예 안 잡아서**, mGBA 가 이 캔버스로
+         WebGL 그림판을 만들 때 크기가 0 으로 잡힐 수 있습니다.
+         그러면 게임은 도는데 화면이 까맣습니다. visibility 는 자리를
+         그대로 두고 그리기만 안 합니다. -->
+    <canvas id="screenGba" width="240" height="160" style="visibility:hidden"></canvas>
     <div id="page"></div>
   </div>
 
@@ -505,14 +535,28 @@ function fit(){
   const gx = Math.round((dw-gw)/2), gy = Math.round((dh-gh)/2);
 
   const stg = $("stage");
-  stg.style.left=(gx-2)+"px"; stg.style.top=(gy-2)+"px";
-  stg.style.width=(gw+4)+"px"; stg.style.height=(gh+4)+"px";
+  /* ★ 좌우 선은 위아래 끝까지 (바깥 테두리에 딱 붙습니다).
+       세로 여백이 아예 없으므로 쏠릴 것도 없습니다. */
+  stg.style.left=(gx-2)+"px"; stg.style.top="0px";
+  stg.style.width=(gw+4)+"px"; stg.style.height=dh+"px";
   /* ★ 캔버스의 **그림 크기**(width/height 속성)는 에뮬레이터가 정합니다.
        여기서는 **보이는 크기**(style)만 정합니다. 둘을 헷갈리면
        화면이 뭉개지거나 늘어납니다. */
   $("screen").style.width=gw+"px"; $("screen").style.height=gh+"px";
+  $("screen").style.top=gy+"px";
+  /* ★ GBA 캔버스도 같이 재웁니다. 두 캔버스가 겹쳐 있고 시스템에 따라
+       한쪽만 보입니다 — 크기를 안 맞추면 GBA 가 원래 크기(240×160)로
+       조그맣게 박힙니다. */
+  /* ★★ 여기서 **보이고 숨기는 판단을 하면 안 됩니다.** ★★
+       fit() 은 창 크기가 바뀔 때만 돕니다(같은 크기면 첫 줄에서 그냥
+       돌아갑니다). 그래서 여기에 두면 **게임을 켜도 화면이 안 나오고**,
+       브라우저를 전체화면으로 했다 돌리는 식으로 크기를 바꿔야 그제서야
+       나옵니다. 실제로 GBA 가 그 증상이었습니다.
+       보이기/숨기기는 화면 상태가 바뀔 때마다 도는 draw() 가 맡습니다. */
+  { const cg = $("screenGba");
+    cg.style.width=gw+"px"; cg.style.height=gh+"px"; cg.style.top=gy+"px"; }
   const pg = $("page");
-  pg.style.left="0px"; pg.style.top="0px"; pg.style.width=gw+"px"; pg.style.height=gh+"px";
+  pg.style.left="0px"; pg.style.top=gy+"px"; pg.style.width=gw+"px"; pg.style.height=gh+"px";
 
   $("paneL").style.left="0px";        $("paneL").style.width=gx+"px";
   $("paneR").style.left=(gx+gw)+"px"; $("paneR").style.width=(dw-gx-gw)+"px";
@@ -586,8 +630,8 @@ function fit(){
   const py = (isGba ? shY : byTop) - GAP_PILL_BTN - pillH;
   place($("btnSel"), px, py, pillW, pillH);
   place($("btnSta"), px+pillW+gapB, py, pillW, pillH);
-  place($("lblSel"), px, py-11, pillW);
-  place($("lblSta"), px+pillW+gapB, py-11, pillW);
+  place($("lblSel"), px, py-15, pillW);
+  place($("lblSta"), px+pillW+gapB, py-15, pillW);
 
   /* 안내글은 구석 존 아래부터 SELECT 이름표 위까지.
      ★ 존 아래에서 시작해야 합니다. 겹치면 글자가 버튼 밑에 깔립니다. */
@@ -632,8 +676,24 @@ function draw(){
   if (holdCancel) holdCancel();
   const st = ui.state, pg = $("page"), inf = $("info"), sc = $("screen");
   const playing = st.screen === "play";
-  sc.style.visibility = playing ? "visible" : "hidden";
+  /* ★★ 어느 캔버스를 보일지는 **여기서** 정합니다. ★★
+       게임보이·컬러는 binjgb 가 #screen 에 2D 로 그리고, GBA 는 mGBA 가
+       #screenGba 에 제 방식으로 그립니다. 한 캔버스에 두 방식을 같이
+       못 붙여서 캔버스가 둘입니다. 같은 자리에 겹쳐 있고 한쪽만 보입니다.
+
+     ★ 전에는 이 판단이 fit() 안에 있었습니다. fit() 은 **창 크기가 바뀔
+       때만** 도는 함수라(같은 크기면 첫 줄에서 돌아갑니다), 게임을 켜도
+       화면이 안 나오고 브라우저 크기를 바꿔야 그제서야 나왔습니다.
+       draw() 는 화면 상태가 바뀔 때마다 도니 여기가 제자리입니다. */
+  const onGba = playing && st.systemId === "gba";
+  sc.style.visibility = (playing && !onGba) ? "visible" : "hidden";
+  $("screenGba").style.visibility = onGba ? "visible" : "hidden";
   pg.style.display = playing ? "none" : "block";
+  /* ★ 여기를 "게임 중이면 무조건 안 띄움" 으로 막으면 안 됩니다.
+       배터리 세이브 실패("COULD NOT SAVE") 는 **게임 중에 반드시** 떠야
+       하는 안내입니다. 실제로 그렇게 막았다가 검사에 걸렸습니다.
+       띄우지 말아야 할 것은 안내를 **세우지 않는 쪽**에서 막습니다
+       (색 토글 참고 — 구석 버튼에 이미 COLOR/AMBER 라고 적혀 있습니다). */
   $("note").textContent = st.notice || "";
 
   /* ── 구석 존 ─────────────────────────────────────────────────────── */
@@ -680,7 +740,11 @@ function draw(){
   else if (st.screen === "list"){
     const list = ui.list();
     pg.innerHTML = "<h2>" + esc(ui.systemName()) + "</h2>"
-      + `<div class="row add" data-add="1"><div class="t">+ ADD GAME</div></div>`
+      /* ★ 글자가 **실제로 열리는 창**과 맞아야 합니다.
+           폴더가 되는 기기(안드로이드·PC)에서는 폴더 고르기가 열립니다.
+           아이폰은 폴더 고르기가 없어서 파일 여러 개 고르기가 열립니다.
+           같은 글자를 쓰면 한쪽은 반드시 거짓말이 됩니다. */
+      + `<div class="row add" data-add="1"><div class="t">+ ADD GAME${CAN_DIR ? " FOLDER" : ""}</div></div>`
       /* ★ zip 은 줄을 따로 둡니다.
            안드로이드에서 "+ ADD GAME" 은 **폴더 고르기**를 여는데,
            거기서는 zip 파일을 고를 수가 없습니다. 그러면 이 기능이
@@ -700,7 +764,7 @@ function draw(){
                  + (r.states.some(Boolean)?"STATE ":"") + (r.note||""))}</div>
                <div class="hold"></div></div>`
           ).join("")
-        : `<div class="empty">NO GAMES HERE YET.<br><br>TAP + ADD GAME.</div>`);
+        : `<div class="empty">NO GAMES HERE YET.<br><br>TAP + ADD GAME${CAN_DIR ? " FOLDER" : ""}.</div>`);
     inf.innerHTML = `<div class="h">${list.length} GAME${list.length===1?"":"S"}</div><hr>
       <div class="v">
         TAP ONCE TO PICK<br>
@@ -819,7 +883,11 @@ function loadMgba(){
     try { s = document.createElement("script"); } catch (e) { rej(new Error("no-mgba")); return; }
     s.onload  = () => finish(true);
     s.onerror = () => finish(false);
-    s.src = "mgba.js";
+    /* ★ mgba.js 를 직접 부르면 안 됩니다 — 그건 **ES 모듈**이라
+         <script src> 로는 안 뜹니다(조용히 실패합니다).
+         평범한 스크립트인 껍데기를 부르고, 껍데기가 import() 로 알맹이를
+         불러옵니다. */
+    s.src = "mgba-glue.js";
     try { (document.body || document.documentElement).appendChild(s); }
     catch (e) { finish(false); }
   });
@@ -889,6 +957,7 @@ function boot(){
     detectSystem: GameMode.detectSystem,
     fetchRom, loadCore,
     canvas: $("screen"),
+    canvasGba: $("screenGba"),
     prefs: PREFS,
     /* ★ 화면 흐름 쪽이 **스스로 다시 그려야** 할 때가 있습니다.
          3초짜리 타이머에서 오는 저장 실패 안내 같은 것입니다.

@@ -117,8 +117,8 @@ const CASES = [
    /if \(r\.bundled\) \{ notice = "BUILT-IN — CANNOT DELETE"; return false; \}/, '', "ui"],
 
   ["컬러 토글이 에뮬에 전달 안 되게", "ui.js",
-   /if \(this\.d\.engine\.setColorMode\) this\.d\.engine\.setColorMode\(colorReal\);\n    notice = colorReal/,
-   'notice = colorReal', "ui"],
+   /if \(this\.d\.engine\.setColorMode\) this\.d\.engine\.setColorMode\(colorReal\);/,
+   '', "ui"],
 
   ["조작판을 숨겨도 화면이 안 커지게", "index.html",
    /const minSide = showPad \? MIN_SIDE_PAD : MIN_SIDE_BARE;/,
@@ -129,7 +129,7 @@ const CASES = [
    '  if (gw > maxW) { gw = Math.max(80, maxW); }', "page"],
 
   ["글자 감싸기(esc) 없애기", "index.html",
-   /<div class="t">\$\{esc\(r\.title\)\}<\/div>/, '<div class="t">${r.title}</div>', "page"],
+   /<div class="t">\$\{esc\(r\.title\)\}/, '<div class="t">${r.title}', "page"],
 
   ["GBC 를 게임보이로 잘못 분류", "game.js",
    /return \(flag === 0x80 \|\| flag === 0xC0\) \? "gbc" : "gb";/, 'return "gb";', "ui"],
@@ -240,6 +240,68 @@ const CASES = [
 
   ["zip 안의 zip 을 그냥 버리기 (왜 비었는지 안 알려줌)", "unzip.js",
    /    if \(\/\\\.zip\$\/i\.test\(base\)\) \{ skipped\.nested\+\+; continue; \}/, '', "zip"],
+
+  /* ── GBA 껍데기 (mgba-glue.js) ─────────────────────────────────────
+       ★ binjgb 에서 **두 번** 데인 자리입니다. 반드시 방해로 확인합니다. */
+  ["끝낼 때 파일시스템을 안 치우기 (켤 때마다 롬이 쌓임)", "mgba-glue.js",
+   /    safe\(\(\) => this\._rm\(this\.romPath\)\);/, '', "gba"],
+
+  ["끝낼 때 저장칸 파일을 안 치우기", "mgba-glue.js",
+   /      for \(const f of dir\) this\._rm\(this\.paths\.saveStatePath \+ "\/" \+ f\);/,
+   '', "gba"],
+
+  ["끝낼 때 자동저장 타이머를 안 끄기", "mgba-glue.js",
+   /    safe\(\(\) => clearInterval\(this\.sramTimer\)\);/, '', "gba"],
+
+  ["GBA 배터리 세이브 실패를 삼키기", "mgba-glue.js",
+   /          p\.catch\(\(\) => \{ if \(!this\.dead\) this\.sramDirty = true; \}\);/,
+   '          void 0;', "gba"],
+
+  ["롬 이름을 고정으로 (세이브가 딴 게임과 섞임)", "mgba-glue.js",
+   /    const tag = String\(this\.opts\.romId \|\| "rom"\)/,
+   '    const tag = String("rom")', "gba"],
+
+  ["파일 이름을 무시하고 롬 헤더 이름 쓰기 (한글 제목이 코드명으로 보임)", "game.js",
+   /      id, title: \(!\(extra && extra\.fromBundled\) && named\) \? named : romTitle\(bytes, fileName\),/,
+   '      id, title: romTitle(bytes, fileName),', "store"],
+
+  ["끝의 _K · _E 를 (K) (E) 로 안 바꾸기", "game.js",
+   /  if \(m\) \{ n = m\[1\]; tag = " \(" \+ m\[2\] \+ "\)"; \}/, '', "store"],
+
+  ["밑줄을 띄어쓰기로 안 되돌리기 (제목에 _ 가 그대로 보임)", "game.js",
+   /  n = n\.replace\(\/_\/g, " "\)\.replace\(\/\\s\+\/g, " "\)\.trim\(\);/,
+   '  n = n.trim();', "store"],
+
+  /* ── 형님이 **눈으로** 찾아낸 것들 (2026-08-11). 전부 검사가 못 봤습니다 ── */
+  ["캔버스 보이기 판단을 다시 fit() 으로 (게임 켜도 까만 화면)", "index.html",
+   /  const onGba = playing && st\.systemId === "gba";\n  sc\.style\.visibility = \(playing && !onGba\) \? "visible" : "hidden";\n  \$\("screenGba"\)\.style\.visibility = onGba \? "visible" : "hidden";/,
+   '  sc.style.visibility = playing ? "visible" : "hidden";', "page"],
+
+  ["가짜 GBA 코어가 세션을 등록하지 않게 (GBA 켜는 길이 통째로 안 돎)", "test/page.js",
+   /    sandbox\.GameMode\.registerCore\("gba", FakeGbaSession\);/, '', "page"],
+  /* ★ 옛 결함을 **그대로 재현**해야 합니다. 원본 복사를 그냥 빼버리면
+       화면이 내내 까맣게 되어 두 번 칠해도 같아집니다(까만색은 덧칠해도
+       0단계 그대로). 그러면 방해가 성립하지 않습니다.
+       옛 코드의 실제 모습은 "한 번 채운 뒤로는 그 자리에 덧칠" 입니다. */
+  ["칠하기를 옛 방식으로 (한 번 채운 뒤 그 자리에 덧칠 → 색이 한 단계씩 어두워짐)", "game.js",
+   /    this\.imageData\.data\.set\(this\.frameBuf\);\n    if \(!this\.colorReal\) tintOrange/,
+   '    if (!this._seeded) { this.imageData.data.set(this.frameBuf); this._seeded = true; }\n    if (!this.colorReal) tintOrange', "run"],
+
+  ["지울 때 세이브까지 통째로 지우기", "game.js",
+   /      const cur = await tx\(db, "readonly", s => s\.get\(id\)\);\n      const keep = cur && \(cur\.sram \|\| \(cur\.states \|\| \[\]\)\.some\(Boolean\)\);\n      if \(!keep\) \{ await tx\(db, "readwrite", s => s\.delete\(id\)\); return; \}/,
+   '      await tx(db, "readwrite", s => s.delete(id)); return; /*방해*/', "store"],
+
+  ["중복된 게임 이름을 안 알려주기", "ui.js",
+   /      const names = dupNames\.join\(", "\) \+ \(dup > dupNames\.length \? " \+" \+ \(dup - dupNames\.length\) : ""\);\n      parts\.push\(dup \+ " ALREADY IN" \+ \(names \? " \(" \+ names \+ "\)" : ""\)\);/,
+   '      parts.push(dup + " ALREADY IN");', "ui"],
+
+  ["게임 화면에도 색 토글 글자를 띄우기", "ui.js",
+   /    notice = \(screen === "play"\) \? "" : \(colorReal \? "REAL COLOR" : "TEMPAD COLOR"\);/,
+   '    notice = colorReal ? "REAL COLOR" : "TEMPAD COLOR";', "ui"],
+
+  /* 형님이 화면을 보고 찾아낸 것 — 검사가 못 봐서 배포까지 됐습니다 */
+  ["zip 파일칸을 숨김 목록에서 빼기 (회색 버튼이 화면에 튀어나옴)", "index.html",
+   /#file,#dir,#zip\{ position:fixed;/, '#file,#dir{ position:fixed;', "page"],
 
   ["넣는 중에 또 넣기를 막지 않기", "index.html",
    /    if \(importing\) \{ ui\.warn\("STILL ADDING — WAIT"\); draw\(\); return; \}/, '', "page"],

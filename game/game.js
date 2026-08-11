@@ -184,6 +184,28 @@ function romTitle(bytes, fileName) {
   return "UNTITLED";
 }
 
+/* ── 파일 이름 → 화면에 뜰 제목 ──────────────────────────────────────────
+   규칙은 셋뿐입니다. 넣는 사람이 파일 이름만 정하면 됩니다.
+
+     확장자를 뗀다                황금의_태양_K.gba
+     끝의 _K / _E 를 (K) / (E) 로   황금의_태양 + (K)
+     남은 _ 는 띄어쓰기로           황금의 태양 (K)
+
+   ★ 한글이면 한글판, 영문이면 영문판 — 이름만 봐도 압니다.
+   ★ 이름이 비었거나 쓸 수 없으면 null 을 돌려주고, 부르는 쪽이
+     롬 헤더에서 읽습니다(지금까지의 방식).                              */
+function nameToTitle(fileName) {
+  if (!fileName) return null;
+  let n = String(fileName).replace(/\.[^.]*$/, "").trim();
+  if (!n) return null;
+  let tag = "";
+  const m = /^(.*?)[ _]([KE])$/.exec(n);
+  if (m) { n = m[1]; tag = " (" + m[2] + ")"; }
+  n = n.replace(/_/g, " ").replace(/\s+/g, " ").trim();
+  if (!n) return null;
+  return n + tag;
+}
+
 /* 같은 롬을 두 번 넣지 않도록 간단한 지문을 만듭니다.
    암호용이 아니라 구분용이라 이 정도면 충분합니다. */
 function romKey(bytes) {
@@ -291,6 +313,11 @@ function listByCursor(db) {
       const c = ev.target.result;
       if (!c) return;
       const v = c.value || {};
+      /* ★ 지운 게임(세이브만 남겨둔 껍데기)은 여기서 걸러냅니다.
+           ★★ 아래에서 **필요한 필드만 베껴 담기** 때문에, 여기서 안 거르면
+             removed 표시가 그 사본에 안 실려서 목록 쪽 검사가 통째로
+             무력해집니다. 실제로 그래서 지운 게임이 목록에 남았습니다. */
+      if (v.removed) { c.continue(); return; }
       /* ★ 여기서 필요한 것만 베껴 담습니다. v(롬 포함)는 곧 버려집니다. */
       out.push({ id:v.id, title:v.title, file:v.file, fromBundled:v.fromBundled || null,
                  /* ★ 옛 기록에는 system 이 없습니다. 그때는 게임보이뿐이었으니 gb 입니다.
@@ -323,8 +350,23 @@ const RomStore = {
      (2026-08-11 교차검사에서 재현해서 잡았습니다.)                      */
   add(bytes, fileName, extra) {
     const id = romKey(bytes);
+    /* ★★ 제목은 **파일 이름**에서 만듭니다 (기본 게임은 빼고).
+
+       왜 롬 헤더를 안 쓰나 — 한글 패치판은 롬 안의 이름이 원본(일본판)
+       코드명 그대로입니다. "황금의 태양" 이 `OugonTaiyo_A` 로,
+       "효월의 원무곡" 이 `CASTLEVANIA2`(다른 게임 이름!)로 뜹니다.
+       아이가 알아볼 수 없습니다.
+
+       왜 따로 표를 안 두나 — 한때 지문→이름 표를 만들었는데, 열쇠가
+       `9zlds-1kkfvdp1gilx3` 같은 지문이라 **사람이 고칠 수가 없습니다.**
+       게임 하나 넣을 때마다 표를 고쳐야 하는 짐이 생깁니다.
+       파일 이름이면 넣는 사람이 그 자리에서 정합니다. */
+    const named = nameToTitle(fileName);
     const base = {
-      id, title: romTitle(bytes, fileName), file: fileName || "",
+      /* ★ 기본 게임(fromBundled)은 파일 이름이 우리가 정한 것이라
+           헤더 쪽이 낫습니다. 화면에서 한 번 더 예쁜 이름으로 바꿉니다. */
+      id, title: (!(extra && extra.fromBundled) && named) ? named : romTitle(bytes, fileName),
+      file: fileName || "",
       size: bytes.length, rom: bytes,
       sram: null, states: [null, null, null],
       added: Date.now(), played: 0,
@@ -360,7 +402,9 @@ const RomStore = {
                기본 게임에 저장을 하는 순간 이름이 바뀌어 버립니다
                ("TOBU TOBU GIRL" → "TOBU"). */
           rec.file   = cur.file || rec.file;
-          rec.title  = cur.title || rec.title;
+          /* ★ 이름을 고쳐 다시 넣으면 **새 이름이 이깁니다.**
+               파일 이름을 바꿔 다시 넣는 것이 곧 이름 고치기입니다. */
+          rec.title  = (!(extra && extra.fromBundled) && named) ? named : (cur.title || rec.title);
           /* 기본 게임 표시도 지웁니다 — 한 번 붙으면 계속 붙어 있어야 합니다 */
           rec.fromBundled = cur.fromBundled || rec.fromBundled;
           /* ★★ 어느 기기 것인지도 처음 것을 지킵니다. ★★
@@ -402,6 +446,8 @@ const RomStore = {
     const out = [];
     for (const r of arr) {
       try {
+        /* ★ 지운 게임은 목록에 안 보입니다. 세이브만 남겨둔 껍데기입니다. */
+        if (r && r.removed) continue;
         out.push({ id:r.id, title:r.title || "UNTITLED", file:r.file || "",
                    fromBundled: r.fromBundled || null,
                    system: r.system || "gb",      /* 옛 기록은 전부 게임보이 */
@@ -417,6 +463,9 @@ const RomStore = {
     try {
       const r = await tx(db, "readonly", s => s.get(id));
       if (!r) return null;
+      /* ★ 지운 게임은 롬이 없습니다. 켜려 하면 안 됩니다 —
+           목록에도 안 보이지만, 옛 화면이 붙들고 있던 id 로 들어올 수 있습니다. */
+      if (r.removed) return null;
       /* ★ 옛 기록에는 system 이 없습니다. list() 는 이걸 채워주는데
            get() 은 안 채워줬습니다. 그래서 옛 게임을 켜면 playing.system 이
            undefined 가 되고, 슬롯에 저장할 때 **그 순간 보고 있던 목록의**
@@ -494,9 +543,35 @@ const RomStore = {
       t.onerror = t.onabort = () => { db.close(); no(why || t.error || new Error("db-error")); };
     }));
   },
+  /* ★★ 게임을 지워도 **세이브는 남깁니다.** ★★
+
+     전에는 기록을 통째로 지웠습니다. 그러면 자리를 비우려고 게임 하나를
+     지운 순간, 그 안에 있던 배터리 세이브(포켓몬의 "리포트")와 저장 칸이
+     같이 사라졌습니다. 되돌릴 방법이 없습니다.
+
+     이제는 **롬 알맹이만 버리고 세이브는 남깁니다.** 롬은 최대 32MB,
+     세이브는 몇십 KB 라 자리를 비우는 목적은 그대로 달성됩니다.
+     같은 롬을 다시 넣으면 add() 가 세이브를 그대로 이어줍니다
+     (같은 롬인지는 내용 지문으로 봅니다 — 파일 이름이 달라도 됩니다).
+
+     ★ 남길 게 없으면(세이브도 저장칸도 없으면) 그냥 지웁니다.
+       빈 껍데기를 쌓아둘 이유가 없습니다.                                */
   async remove(id) {
     const db = await openDB();
-    try { await tx(db, "readwrite", s => s.delete(id)); }
+    try {
+      const cur = await tx(db, "readonly", s => s.get(id));
+      const keep = cur && (cur.sram || (cur.states || []).some(Boolean));
+      if (!keep) { await tx(db, "readwrite", s => s.delete(id)); return; }
+      const stub = {
+        id: cur.id, title: cur.title, file: cur.file || "",
+        system: cur.system || "gb", fromBundled: cur.fromBundled || null,
+        sram: cur.sram, states: cur.states || [null, null, null],
+        added: cur.added || 0, played: cur.played || 0,
+        rom: null, size: 0,
+        removed: true,        /* 목록에는 안 보입니다 */
+      };
+      await tx(db, "readwrite", s => s.put(stub));
+    }
     finally { db.close(); }
   },
 };
@@ -613,10 +688,7 @@ class Session {
     let n60 = this.next60(this.ticks);
     for (;;) {
       const ev = m._emulator_run_until_f64(this.e, Math.min(untilTicks, n60));
-      if (ev & EVENT_NEW_FRAME) {
-        m._rewind_append(this.rewindPtr, this.e);
-        if (this.imageData) this.imageData.data.set(this.frameBuf);
-      }
+      if (ev & EVENT_NEW_FRAME) m._rewind_append(this.rewindPtr, this.e);
       if (ev & EVENT_AUDIO_BUFFER_FULL) this.pushAudio();
       if (ev & EVENT_UNTIL_TICKS) {
         const cur = this.ticks;
@@ -651,7 +723,23 @@ class Session {
        참이면 에뮬레이터가 낸 색 그대로 (게임 본래의 색)
      둘 다 **게임 화면 안쪽만** 바뀝니다. 틀(UI)은 언제나 주황·검정입니다. */
   paint() {
-    if (!this.ctx2d) return;
+    if (!this.ctx2d || !this.frameBuf || !this.imageData) return;
+    /* ★★★ 원본을 **매번 여기서** 새로 가져옵니다. ★★★
+
+       전에는 "새 프레임이 왔을 때만" 복사해두고, 칠하기는 매 번 돌면서
+       그 버퍼에 tintOrange 를 **덮어썼습니다.** 그러면 새 프레임이 안 온
+       순간에 **이미 주황으로 칠한 것을 또 칠합니다.** 한 번 더 칠할 때마다
+       색이 조금씩 어긋나서 **화면이 지직거립니다.**
+
+       버튼을 누르는 순간에 특히 티가 납니다 — 손가락 처리 때문에 그 틱에
+       프레임이 안 나오기 때문입니다. 실제 색 모드는 알파만 채워서
+       여러 번 해도 결과가 같으니 멀쩡했습니다. 그래서 "템패드 색일 때만
+       버튼 누르면 지직거린다" 는 모양이 됐습니다.
+
+       이제 원본에서 새로 가져오므로 **몇 번을 칠해도 결과가 같습니다.**
+       (frameBuf 는 에뮬레이터 메모리를 그대로 보는 창이라 언제나 최신입니다.
+        검사가 이 성질을 지킵니다 — test/run.js 의 "두 번 칠해도 같은가".) */
+    this.imageData.data.set(this.frameBuf);
     if (!this.colorReal) tintOrange(this.imageData.data);
     else {
       /* ★ 투명도를 못 박습니다. createImageData 는 전부 투명(0)으로
@@ -942,6 +1030,7 @@ function registerCore(system, SessionClass) { SESSIONS[system] = SessionClass; }
 
 const GameMode = {
   RomStore, readFile, romTitle, romKey, tintOrange,
+  nameToTitle,
   looksLikeGb, looksLikeGba, gbaChecksumOk, gbaHeaderChecksum, detectSystem,
   registerCore,
 

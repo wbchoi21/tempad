@@ -113,4 +113,24 @@ function makeModule(opt={}){
     m["_set_joyp_"+b] = (e,v) => rec("joyp."+b+"="+(v?1:0));
   return m;
 }
-module.exports = { makeDom, makeModule, log, reset:()=>{log.length=0;} };
+/* ── 가짜 캔버스 ───────────────────────────────────────────────────────
+   ★ 화면에 **무엇이 찍혔는지** 봐야 할 때 씁니다. putImageData 로 들어온
+     바이트를 그대로 들고 있습니다. 이게 없으면 "칠하기" 를 검사할 수
+     없습니다 — 실제로 색이 지직거리는 버그를 아무도 못 봤습니다. */
+function makeCanvas(w, h){
+  const shots = [];
+  const ctx = {
+    imageSmoothingEnabled: true,
+    createImageData: (cw, ch) => ({ width:cw, height:ch,
+                                    data:new Uint8ClampedArray(4*cw*ch) }),
+    putImageData: img => { shots.push(Uint8Array.from(img.data)); },
+  };
+  return { width:w||160, height:h||144, style:{},
+           getContext: () => ctx,
+           /* 마지막으로 찍힌 화면 */
+           get last(){ return shots.length ? shots[shots.length-1] : null; },
+           get count(){ return shots.length; },
+           shots };
+}
+
+module.exports = { makeDom, makeModule, makeCanvas, log, reset:()=>{log.length=0;} };

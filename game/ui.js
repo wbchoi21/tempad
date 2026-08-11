@@ -277,7 +277,11 @@ Ui.prototype = {
     this._save("color", colorReal ? "real" : "tempad");
     /* 지금 게임 중이면 즉시 반영합니다 */
     if (this.d.engine.setColorMode) this.d.engine.setColorMode(colorReal);
-    notice = colorReal ? "REAL COLOR" : "TEMPAD COLOR";
+    /* ★ 게임 화면에는 이 글자를 안 띄웁니다. 여기는 **게임 화면**이고,
+         무엇보다 구석 버튼에 이미 COLOR / AMBER 라고 적혀 있어서
+         같은 말을 게임 위에 겹쳐 쓸 이유가 없습니다.
+         목록·메뉴에서는 버튼이 눌렸다는 걸 알려주는 값이 있어 남깁니다. */
+    notice = (screen === "play") ? "" : (colorReal ? "REAL COLOR" : "TEMPAD COLOR");
     return colorReal;
   },
   togglePad() {
@@ -447,6 +451,7 @@ Ui.prototype = {
          "ADDED 0 / 1 FAILED" 만 뜨고 **용량 이야기가 안 나왔습니다.**
          아드님은 zip 이 잘못된 줄 알고 다시 받으러 갑니다. */
     let failSave = 0, failRead = 0;
+    const dupNames = [];        /* 중복이라 뺀 게임 이름 (몇 개만) */
     /* ★ 넣는 도중에 아드님이 시스템을 바꿀 수 있습니다. 그때 "다른 데로 간
          개수" 가 도중에 뜻이 바뀌면 숫자가 거짓말이 됩니다. 시작할 때의
          목록을 기준으로 셉니다. */
@@ -481,7 +486,15 @@ Ui.prototype = {
       try {
         const rec = await this.d.store.add(bytes, f.name, { system: sys });
         streak = 0;
-        if (known.has(rec.id)) dup++;
+        if (known.has(rec.id)) {
+          dup++;
+          /* ★ 숫자만 알려주면 **어느 게임인지** 알 수 없습니다.
+               "3 ALREADY IN" 만 보고는 무엇이 빠졌는지 모릅니다.
+               ★ 중복 판정은 **롬 내용 전체의 지문**으로 합니다 —
+                 파일 이름이 달라도 내용이 같으면 같은 게임입니다.
+                 (그래서 "01 Tetris.gb" 와 "테트리스.gb" 도 한 개로 셉니다.) */
+          if (dupNames.length < 6) dupNames.push(rec.title || f.name || "?");
+        }
         else {
           known.add(rec.id);
           added++;
@@ -511,7 +524,11 @@ Ui.prototype = {
          (2026-08-11 교차검사에서 지적) */
     if (stopped && done < use.length) parts.push((use.length - done) + " NOT TRIED");
     if (elsewhere) parts.push(elsewhere + " IN OTHER SYSTEMS");
-    if (dup)    parts.push(dup + " ALREADY IN");
+    if (dup) {
+      /* 이름을 같이 적어줍니다. 많으면 앞의 몇 개만. */
+      const names = dupNames.join(", ") + (dup > dupNames.length ? " +" + (dup - dupNames.length) : "");
+      parts.push(dup + " ALREADY IN" + (names ? " (" + names + ")" : ""));
+    }
     if (bad)    parts.push(bad + " NOT A GAME");
     if (big)    parts.push(big + " TOO BIG");
     if (failed) parts.push(failed + " FAILED");
@@ -523,8 +540,9 @@ Ui.prototype = {
   },
 
   /* ── 지우기 — 반드시 한 번 물어봅니다 ────────────────────────────────
-     ★ 게임을 지우면 그 게임의 세이브도 같이 사라집니다.
-       되돌릴 수 없습니다. 그래서 손가락이 스쳐서 지워지면 안 됩니다.
+     ★ 게임을 지워도 **세이브는 남습니다** (game.js 의 remove 참고).
+       같은 롬을 다시 넣으면 그대로 이어집니다. 그래도 손가락이 스쳐서
+       지워지면 안 됩니다 — 다시 넣으려면 파일을 또 구해와야 합니다.
        길게 눌러서(0.9초) → 화면의 DELETE 버튼. 두 단계입니다.
 
        ★ v2 — 확인은 **화면에 보이는 [DELETE] [KEEP] 버튼**으로 합니다.
@@ -558,7 +576,9 @@ Ui.prototype = {
     pending = null;
     try { await this.d.store.remove(id); }
     catch (e) { notice = "COULD NOT DELETE"; return false; }
-    notice = "DELETED — " + title;
+    /* ★ 세이브가 남는다는 걸 알려줍니다. 안 그러면 아드님이
+         "지우면 다 날아간다" 고 믿고 자리가 없어도 못 지웁니다. */
+    notice = "DELETED — " + title + " (SAVE KEPT)";
     await this.refresh();
     return true;
   },
@@ -625,6 +645,13 @@ Ui.prototype = {
       started = this.d.engine.start(core, bytes, {
         system: sys,
         canvas: this.d.canvas,
+        /* ★ GBA 는 제 캔버스에 직접 그립니다 (한 캔버스에 2D 와 WebGL 을
+             같이 못 붙입니다). 있으면 넘기고, 없으면 게임보이만 돕니다. */
+        canvasGba: this.d.canvasGba,
+        /* ★ mGBA 는 세이브 파일 이름을 롬 이름에서 만듭니다.
+             내용 지문인 우리 id 를 넘겨야 **같은 롬이면 항상 같은 이름**이
+             되어 세이브가 이어집니다. */
+        romId: rec.id,
         colorReal,
         sram: sram || undefined,
         /* 게임이 스스로 저장하면 여기로 옵니다. 저장소에 넣어둔 롬은
